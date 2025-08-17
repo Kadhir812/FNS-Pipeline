@@ -1,0 +1,39 @@
+{
+  "name": "signaledge-frontend",
+  "version": "1.0.0",
+  "description": "SignalEdge - Professional Financial Intelligence Dashboard",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "axios": "^1.10.0",
+    "date-fns": "^3.6.0",
+    "lucide-react": "^0.447.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.8",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "eslint": "^9.11.1",
+    "vite": "^7.0.5"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint src --ext js,jsx"
+  },
+  "browserslist": {
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  }
+}
