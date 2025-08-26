@@ -6,13 +6,17 @@ from datetime import datetime
 import re
 import hashlib
 import os
-from langchain_community.llms import Ollama  # Changed
+# Modern LangChain imports
+from langchain_ollama import OllamaLLM
 from langchain.prompts import PromptTemplate
-from langchain.chains import LLMChain, SequentialChain
+from langchain_core.runnables import RunnablePassthrough
+from langchain_core.output_parsers import StrOutputParser
+import logging
+import sys
 
 KAFKA_BROKER = 'localhost:29092'
 TOPIC = 'Financenews-raw'
-MARKETAUX_API_KEY =  'qyntLjkPLqpWNaiP64UufWDwnWdQsp1aLNh9p3sw' # <-- Add your API key here
+MARKETAUX_API_KEY=  'qyntLjkPLqpWNaiP64UufWDwnWdQsp1aLNh9p3sw' # <-- Add your API key here
 
 # Path to DistilBART model
 DISTILBART_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "T", "models", "distilbart-mnli")
@@ -23,6 +27,17 @@ producer = KafkaProducer(
     bootstrap_servers=KAFKA_BROKER,
     value_serializer=lambda v: json.dumps(v).encode('utf-8')
 )
+
+# Setup logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(f"extract_paths_{datetime.now().strftime('%Y%m%d')}.log"),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger("extract")
 
 def clean_text(text):
     if text:
@@ -40,9 +55,15 @@ def fetch_news():
     }
     r = requests.get(url, params=params, timeout=10)
     print("DEBUG: Raw API response:")
-    print(r.text)  # Debug the actual response content
+    print(r.text[:500] + "..." if len(r.text) > 500 else r.text)  # Show first part to avoid console flooding
     try:
         data = r.json()
+        # Show entity information from the first article if available
+        if data and 'data' in data and len(data['data']) > 0:
+            first_article = data['data'][0]
+            if 'entities' in first_article and len(first_article['entities']) > 0:
+                first_entity = first_article['entities'][0]
+                print(f"DEBUG: First entity example - Symbol: {first_entity.get('symbol')}, Name: {first_entity.get('name')}")
     except ValueError:
         print("❌ Not a valid JSON response!")
         print(r.text)  # Check for HTML/XML or error message
@@ -138,9 +159,13 @@ def classify_with_distilbart(text):
     Use DistilBART model to classify financial news into categories A-J
     """
     if not USE_DISTILBART or not text or len(text.strip()) < 15:
+        logger.info(f"DistilBART skipped: available={USE_DISTILBART}, text_length={len(text) if text else 0}")
         return None
         
     try:
+        logger.info("Starting DistilBART classification...")
+        start_time = time.time()
+        
         # Only import if model is available
         from transformers import pipeline
         
@@ -186,17 +211,30 @@ def classify_with_distilbart(text):
         }
         
         # Classify with DistilBART
+        classification_start = time.time()
         result = classifier(text_short, categories)
+        classification_time = time.time() - classification_start
+        
         predicted_category = result['labels'][0]
         confidence = result['scores'][0]
         
         # Map to letter code
         final_category = category_map.get(predicted_category, "J")
         
+        # Log detailed results
+        logger.info(f"DistilBART classification SUCCESS - Category: {final_category} - " 
+                    f"Label: '{predicted_category}' - Confidence: {confidence:.3f} - "
+                    f"Time: {classification_time:.2f}s")
+        
+        # Top 3 categories with scores for analysis
+        top3 = [(result['labels'][i], result['scores'][i]) for i in range(min(3, len(result['labels'])))]
+        logger.debug(f"Top 3 categories: {top3}")
+        
         print(f"   🤖 DistilBART Classification: {final_category} ({predicted_category.split()[0]}) - {confidence:.2f}")
         return final_category
         
     except Exception as e:
+        logger.error(f"DistilBART classification FAILED: {str(e)}")
         print(f"   ❌ DistilBART error: {e}")
         return None
 
@@ -213,7 +251,7 @@ def enrich_news(payload, article_num, total_articles):
     
     start_time = time.time()
 
-    # CATEGORY - ML-based classification with DistilBART (keep as is)
+    # CATEGORY - ML-based classification with DistilBART
     print(f"   📂 Classifying news category...")
     distilbart_category = classify_with_distilbart(text)
     if distilbart_category:
@@ -239,12 +277,16 @@ def enrich_news(payload, article_num, total_articles):
             print(f"   ❌ Category classification error: {e}")
             payload['category'] = "J"
 
-    # Use LangChain for the remaining enrichment if available
+    # Use LangChain for key phrases and summary (keep as is)
     if USE_LANGCHAIN:
         try:
             print("   🔄 Processing with LangChain...")
+            logger.info(f"Article {article_num}: Using LangChain path")
+            
             # Process the text with our sequential chain
-            results = NEWS_PROCESSING_CHAIN.invoke({"text": text})  # Changed from () to .invoke()
+            start_langchain = time.time()
+            results = NEWS_PROCESSING_CHAIN.invoke({"text": text})
+            langchain_time = time.time() - start_langchain
             
             # Extract results
             payload['key_phrases'] = clean_ollama_response(results.get('key_phrases', 'N/A'))
@@ -253,25 +295,29 @@ def enrich_news(payload, article_num, total_articles):
             payload['summary'] = clean_ollama_response(results.get('summary', 'Financial news update'))
             print(f"   ✅ Summary: {payload['summary'][:60]}...")
             
-            # Additional validation for impact (keep your logic)
-            raw_impact = results.get('impact_assessment', 'NEUTRAL')
-            if "POSITIVE" in raw_impact.upper():
-                payload['impact_assessment'] = "POSITIVE"
-            elif "NEGATIVE" in raw_impact.upper():
-                payload['impact_assessment'] = "NEGATIVE"
-            else:
-                payload['impact_assessment'] = "NEUTRAL"
-            print(f"   ✅ Impact: {payload['impact_assessment']}")
+            logger.info(f"Article {article_num}: LangChain SUCCESS - Time: {langchain_time:.2f}s")
             
         except Exception as e:
+            logger.error(f"Article {article_num}: LangChain FAILED - Error: {str(e)}")
             print(f"   ❌ LangChain processing error: {e}")
             print("   🔄 Falling back to individual Ollama calls...")
-            # Fall back to the original processing method
+            # Fall back to the original processing method for key phrases and summary
             fallback_to_individual_processing(payload, text)
     else:
-        # Use the original individual processing methods
+        logger.info(f"Article {article_num}: Using direct Ollama path (LangChain not available)")
+        # Use the original individual processing methods for key phrases and summary
         fallback_to_individual_processing(payload, text)
 
+    # Apply impact assessment rules using MarketAux API's sentiment/confidence
+    print(f"   📊 Calculating impact assessment from MarketAux sentiment...")
+    impact = calculate_impact_assessment(
+        sentiment=payload.get('sentiment'),  # Direct from MarketAux API
+        confidence=payload.get('confidence'),  # Direct from MarketAux API
+        risk_score=payload.get('risk_score')
+    )
+    payload['impact_assessment'] = impact
+    print(f"   ✅ Impact: {impact} (from sentiment={payload.get('sentiment'):.2f}, confidence={payload.get('confidence'):.1f})")
+    
     processing_time = time.time() - start_time
     print(f"   ⏱️  Processing time: {processing_time:.2f}s")
     print(f"   🎉 Article {article_num}/{total_articles} COMPLETED!")
@@ -279,7 +325,9 @@ def enrich_news(payload, article_num, total_articles):
     return payload
 
 def fallback_to_individual_processing(payload, text):
-    """Fallback to individual Ollama calls when LangChain is unavailable"""
+    """Fallback to individual Ollama calls for key phrases and summary only"""
+    logger.info("Using fallback path with direct Ollama calls")
+    
     # KEY PHRASES - Advanced NER with financial focus
     print(f"   🔍 Extracting key phrases...")
     try:
@@ -289,9 +337,12 @@ def fallback_to_individual_processing(payload, text):
             "Text: + text\n"
             "Entities:"
         )
+        start_time = time.time()
         payload['key_phrases'] = ollama_query(key_phrases_prompt, text)
+        logger.info(f"Direct Ollama - Key phrases SUCCESS - Time: {time.time() - start_time:.2f}s")
         print(f"   ✅ Key phrases: {payload['key_phrases'][:50]}...")
     except Exception as e:
+        logger.error(f"Direct Ollama - Key phrases FAILED: {str(e)}")
         print(f"   ❌ Key phrases error: {e}")
         payload['key_phrases'] = "N/A"
 
@@ -303,33 +354,16 @@ def fallback_to_individual_processing(payload, text):
             "Text: + text\n"
             "Summary:"
         )
+        start_time = time.time()
         payload['summary'] = ollama_query(summary_prompt, text)
+        logger.info(f"Direct Ollama - Summary SUCCESS - Time: {time.time() - start_time:.2f}s")
         print(f"   ✅ Summary: {payload['summary'][:60]}...")
     except Exception as e:
+        logger.error(f"Direct Ollama - Summary FAILED: {str(e)}")
         print(f"   ❌ Summary error: {e}")
         payload['summary'] = "Financial news update"
 
-    # IMPACT - Sentiment with financial context
-    print(f"   📊 Assessing impact...")
-    try:
-        impact_prompt = (
-            "Market impact: POSITIVE/NEGATIVE/NEUTRAL\n"
-            "Consider: earnings, ratings, M&A, regulations, guidance.\n"
-            "Text: + text\n"
-            "Impact:"
-        )
-        raw_impact = ollama_query(impact_prompt, text)
-        # Additional validation for impact
-        if "POSITIVE" in raw_impact.upper():
-            payload['impact_assessment'] = "POSITIVE"
-        elif "NEGATIVE" in raw_impact.upper():
-            payload['impact_assessment'] = "NEGATIVE"
-        else:
-            payload['impact_assessment'] = "NEUTRAL"
-        print(f"   ✅ Impact: {payload['impact_assessment']}")
-    except Exception as e:
-        print(f"   ❌ Impact error: {e}")
-        payload['impact_assessment'] = "NEUTRAL"
+    # Impact assessment will be calculated in the main function using MarketAux data
 
 def get_doc_id(article):
     # Use title + content for uniqueness (or title + publishedAt if you prefer)
@@ -353,12 +387,13 @@ def load_existing_doc_ids(path):
 
 # Initialize Ollama model
 def get_ollama_model():
-    return Ollama(model=OLLAMA_MODEL, base_url="http://localhost:11434")
+    return OllamaLLM(model=OLLAMA_MODEL, base_url="http://localhost:11434")
 
-# Create the LangChain processing pipeline - place this after your ollama_query function
+# Create the LangChain processing pipeline using modern patterns
 def create_news_processing_chain():
     # Initialize the LLM
     llm = get_ollama_model()
+    output_parser = StrOutputParser()
     
     # KEY PHRASES CHAIN
     key_phrases_template = """Extract financial entities: tickers, amounts, percentages, companies, dates, actions.
@@ -373,11 +408,7 @@ Entities:"""
         input_variables=["text"]
     )
     
-    key_phrases_chain = LLMChain(
-        llm=llm,
-        prompt=key_phrases_prompt,
-        output_key="key_phrases"
-    )
+    key_phrases_chain = key_phrases_prompt | llm | output_parser
     
     # SUMMARY CHAIN
     summary_template = """One sentence summary: Subject + Action + Impact (<15 words).
@@ -391,11 +422,7 @@ Summary:"""
         input_variables=["text"]
     )
     
-    summary_chain = LLMChain(
-        llm=llm,
-        prompt=summary_prompt,
-        output_key="summary"
-    )
+    summary_chain = summary_prompt | llm | output_parser
     
     # IMPACT CHAIN
     impact_template = """Market impact: POSITIVE/NEGATIVE/NEUTRAL
@@ -410,18 +437,19 @@ Impact:"""
         input_variables=["text"]
     )
     
-    impact_chain = LLMChain(
-        llm=llm,
-        prompt=impact_prompt,
-        output_key="impact_assessment"
-    )
+    impact_chain = impact_prompt | llm | output_parser
     
-    # Chain them together
-    return SequentialChain(
-        chains=[key_phrases_chain, summary_chain, impact_chain],
-        input_variables=["text"],
-        output_variables=["key_phrases", "summary", "impact_assessment"]
-    )
+    # Create a chain that returns a dictionary with all the results
+    def process_all(inputs):
+        text = inputs["text"]
+        return {
+            "key_phrases": key_phrases_chain.invoke({"text": text}),
+            "summary": summary_chain.invoke({"text": text}),
+            "impact_assessment": impact_chain.invoke({"text": text})
+        }
+    
+    # Return a simple function that processes everything
+    return lambda inputs: process_all(inputs)
 
 # Initialize the chain once - add this after the create_news_processing_chain function
 try:
@@ -432,6 +460,67 @@ except Exception as e:
     USE_LANGCHAIN = False
     print(f"⚠️ LangChain initialization failed: {e}")
     print("⚠️ Falling back to direct Ollama calls")
+
+def calculate_impact_assessment(sentiment, confidence, risk_score=None):
+    """
+    Calculate impact assessment label based on MarketAux API's sentiment and confidence scores.
+    
+    Args:
+        sentiment: Float value from -1 to 1 (from MarketAux)
+        confidence: Float value from 0 to 100 (from MarketAux)
+        risk_score: Optional float value from 0 to 1
+    
+    Returns:
+        String impact assessment label
+    """
+    try:
+        # Convert to float to ensure proper comparison
+        sentiment = float(sentiment) if sentiment is not None else 0
+        confidence = float(confidence) if confidence is not None else 0
+        risk_score = float(risk_score) if risk_score is not None else None
+        
+        # Log the inputs
+        logger.info(f"Impact assessment inputs: sentiment={sentiment:.2f}, confidence={confidence:.1f}, risk_score={risk_score:.2f if risk_score is not None else 'None'}")
+        
+        # Check for VOLATILE / HIGH RISK condition first (overrides other conditions)
+        if risk_score is not None and risk_score > 0.5:
+            logger.info(f"Impact Assessment: VOLATILE (high risk_score: {risk_score:.2f})")
+            return "VOLATILE"
+            
+        # Check for UNCERTAIN condition
+        if confidence < 30:
+            logger.info("Impact Assessment: UNCERTAIN (low confidence)")
+            return "UNCERTAIN"
+            
+        # Check sentiment ranges with confidence thresholds
+        if sentiment >= 0.5 and confidence >= 60:
+            logger.info("Impact Assessment: STRONGLY POSITIVE")
+            return "STRONGLY POSITIVE"
+            
+        elif 0.2 <= sentiment < 0.5 and confidence >= 40:
+            logger.info("Impact Assessment: POSITIVE")
+            return "POSITIVE"
+            
+        elif -0.2 < sentiment < 0.2:
+            logger.info("Impact Assessment: NEUTRAL")
+            return "NEUTRAL"
+            
+        elif -0.5 < sentiment <= -0.2 and confidence >= 40:
+            logger.info("Impact Assessment: NEGATIVE")
+            return "NEGATIVE"
+            
+        elif sentiment <= -0.5 and confidence >= 60:
+            logger.info("Impact Assessment: STRONGLY NEGATIVE")
+            return "STRONGLY NEGATIVE"
+            
+        else:
+            # Fallback for cases not covered by the rules
+            logger.info("Impact Assessment: NEUTRAL (fallback)")
+            return "NEUTRAL"
+            
+    except Exception as e:
+        logger.error(f"Error calculating impact assessment: {str(e)}")
+        return "NEUTRAL"
 
 def main():
     archive_path = 'news_archive.jsonl'
@@ -468,13 +557,24 @@ def main():
                         if isinstance(publish_date, datetime):
                             publish_date = publish_date.isoformat()
 
+                        # Extract entities from the API response
                         entities = article.get('entities', [])
                         sentiment = None
                         confidence = None
-                        if entities and isinstance(entities, list):
+                        symbol = None
+                        entity_name = None
+                        
+                        # Based on the API response format, entities contains symbol and name
+                        if entities and isinstance(entities, list) and len(entities) > 0:
+                            # Get the first entity data
                             first_entity = entities[0]
                             sentiment = first_entity.get('sentiment_score', None)
                             confidence = first_entity.get('match_score', None)
+                            symbol = first_entity.get('symbol', None)
+                            entity_name = first_entity.get('name', None)
+                            
+                            # Debug what we found in the entity
+                            print(f"   🔍 Found entity: {symbol} - {entity_name}")
 
                         doc_id = get_doc_id(article)
                         if doc_id in existing_doc_ids:
@@ -493,12 +593,20 @@ def main():
                             'source': article.get('source', ''),
                             'link': article.get('url', ''),
                             'image_url': article.get('image_url', None),
+                            'symbol': symbol,
+                            'entity_name': entity_name,
                             # 'entities': entities,
                         }
 
                         # NLP enrichment with detailed debugging
                         payload = enrich_news(payload, i, len(articles))
 
+                        # Final debug output before saving
+                        if symbol and entity_name:
+                            print(f"   ✅ Including entity data - Symbol: {symbol}, Name: {entity_name}")
+                        else:
+                            print(f"   ⚠️ No entity symbol/name found in article")
+                            
                         # Save and send
                         f.write(json.dumps(payload, ensure_ascii=False) + '\n')
                         producer.send(TOPIC, value=payload)

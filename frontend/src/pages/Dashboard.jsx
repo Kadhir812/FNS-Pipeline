@@ -24,7 +24,21 @@ const Dashboard = () => {
 
   // Handle filter changes
   const handleFilterChange = (key, value) => {
-    updateFilter(key, value);
+    if (key === 'reset') {
+      console.log('🔄 Resetting filters');
+      // Reset all filters manually to ensure proper state
+      updateFilter('search', '');
+      updateFilter('sentiment', 'all');
+      updateFilter('riskLevel', 'all');
+      updateFilter('category', 'all');
+      updateFilter('source', 'all');
+      updateFilter('dateRange', { start: '', end: '' });
+      updateFilter('sortBy', 'date');
+      updateFilter('sortOrder', 'desc');
+    } else {
+      console.log('🎛️ Dashboard filter change:', key, value);
+      updateFilter(key, value);
+    }
   };
 
   // Handle sort changes
@@ -38,11 +52,12 @@ const Dashboard = () => {
   useEffect(() => {
     const timeoutId = setTimeout(() => {
       const apiFilters = getAPIFilters();
+      console.log('🔄 Filter changed, searching with:', apiFilters);
       searchArticles(apiFilters);
-    }, 500); // Increased debounce time
+    }, 300); // Reduced debounce time for better UX
 
     return () => clearTimeout(timeoutId);
-  }, [JSON.stringify(filters)]); // Use JSON.stringify to prevent object reference issues
+  }, [filters, searchArticles, getAPIFilters]); // Proper dependencies
 
   const handleReadMore = (article) => {
     setSelectedArticle(article);

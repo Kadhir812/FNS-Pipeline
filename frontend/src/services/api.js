@@ -50,14 +50,14 @@ export const articleAPI = {
   searchArticles: async (params = {}) => {
     const searchParams = new URLSearchParams();
     
-    // Add search parameters
-    if (params.q) searchParams.append('q', params.q);
-    if (params.source) searchParams.append('source', params.source);
-    if (params.category) searchParams.append('category', params.category);
-    if (params.sentiment) searchParams.append('sentiment', params.sentiment);
-    if (params.risk_level) searchParams.append('risk_level', params.risk_level);
-    if (params.risk_score_min !== undefined) searchParams.append('risk_score_min', params.risk_score_min);
-    if (params.risk_score_max !== undefined) searchParams.append('risk_score_max', params.risk_score_max);
+    // Add search parameters with validation
+    if (params.q?.trim()) searchParams.append('q', params.q.trim());
+    if (params.source && params.source !== 'all') searchParams.append('source', params.source);
+    if (params.category && params.category !== 'all') searchParams.append('category', params.category);
+    if (params.sentiment && params.sentiment !== 'all') searchParams.append('sentiment', params.sentiment);
+    if (params.risk_level && params.risk_level !== 'all') searchParams.append('risk_level', params.risk_level);
+    if (params.risk_score_min !== undefined && params.risk_score_min !== '') searchParams.append('risk_score_min', params.risk_score_min);
+    if (params.risk_score_max !== undefined && params.risk_score_max !== '') searchParams.append('risk_score_max', params.risk_score_max);
     if (params.start_date) searchParams.append('start_date', params.start_date);
     if (params.end_date) searchParams.append('end_date', params.end_date);
     if (params.page) searchParams.append('page', params.page);
@@ -65,7 +65,10 @@ export const articleAPI = {
     if (params.sort_by) searchParams.append('sort_by', params.sort_by);
     if (params.sort_order) searchParams.append('sort_order', params.sort_order);
     
-    return api.get(`/articles/search?${searchParams.toString()}`);
+    const url = `/articles/search${searchParams.toString() ? '?' + searchParams.toString() : ''}`;
+    console.log('🌐 API Request URL:', url);
+    
+    return api.get(url);
   },
 
   // Get specific article by ID

@@ -4,7 +4,7 @@ from kafka import KafkaProducer
 
 KAFKA_BROKER = 'localhost:29092'
 TOPIC = 'Financenews-raw'
-input_path = "d:\\big data pipeline\\E\\news_archive.jsonl"
+input_path = "D:\\big data pipeline\\E\\news_archive.jsonl"
 
 def extract_final_answer(text):
     if isinstance(text, str):

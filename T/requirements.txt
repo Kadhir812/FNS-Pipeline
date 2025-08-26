@@ -1,1 +1,11 @@
-pyspark
+torch>=2.0.0
+torchvision>=0.15.0
+torchaudio>=2.0.0
+transformers>=4.30.0
+tokenizers>=0.13.0
+numpy>=1.21.0
+scipy>=1.7.0
+scikit-learn>=1.0.0
+pyspark>=3.3.0
+kafka-python>=2.0.0
+requests>=2.25.0

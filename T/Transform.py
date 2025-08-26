@@ -39,6 +39,8 @@ schema = StructType([
     StructField("category", StringType()),         # <-- enabled
     StructField("summary", StringType()),          # <-- enabled
     StructField("impact_assessment", StringType()),# <-- enabled
+    StructField("symbol", StringType()),           # <-- new field for ticker symbol
+    StructField("entity_name", StringType()),      # <-- new field for company name
     StructField("doc_id", StringType())
 ])
 
@@ -108,14 +110,14 @@ def write_to_es(batch_df, batch_id):
     final_df = enriched_df.select(
         "title", "description", "content", "publishedAt", "source",
         "sentiment", "confidence", "risk_score", "key_phrases",
-        "category", "summary", "impact_assessment",
+        "category", "summary", "impact_assessment", "symbol", "entity_name",
         "link", "image_url", "doc_id"
     )
 
     # === Debug: Show sample batch for new fields ===
     print("Final DataFrame Preview:")
     final_df.select(
-        "title", "key_phrases", "category", "summary", "impact_assessment"
+        "title", "symbol", "entity_name", "key_phrases", "category", "summary", "impact_assessment"
     ).show(truncate=False)
 
     try:

@@ -1,12 +1,16 @@
 import React from 'react';
 import { Search, Filter } from 'lucide-react';
+import './Sidebar.css';
 
 const Sidebar = ({ filters, onFilterChange, availableFilters = {} }) => {
   const handleFilterChange = (key, value) => {
+    console.log('🎛️ Filter changed:', key, '=', value);
     onFilterChange(key, value);
   };
 
   const { sources = [], categories = [] } = availableFilters;
+
+  console.log('📊 Available filters:', { sources: sources.length, categories: categories.length });
 
   return (
     <aside className="sidebar">
@@ -96,6 +100,18 @@ const Sidebar = ({ filters, onFilterChange, availableFilters = {} }) => {
             <option value="medium">Medium Risk</option>
             <option value="high">High Risk</option>
           </select>
+        </div>
+
+        <div className="filter-group">
+          <button 
+            onClick={() => {
+              console.log('🔄 Resetting all filters');
+              onFilterChange('reset', null);
+            }}
+            className="reset-filters-btn"
+          >
+            Reset All Filters
+          </button>
         </div>
       </div>
     </aside>

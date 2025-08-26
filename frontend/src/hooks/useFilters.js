@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { articleAPI } from '../services/api';
 
 export const useFilters = () => {
@@ -63,21 +63,21 @@ export const useFilters = () => {
   };
 
   // Convert filters to API format
-  const getAPIFilters = () => {
+  const getAPIFilters = useCallback(() => {
     const apiFilters = {};
     
-    if (filters.search) apiFilters.q = filters.search;
+    if (filters.search?.trim()) apiFilters.q = filters.search.trim();
     if (filters.source !== 'all') apiFilters.source = filters.source;
     if (filters.category !== 'all') apiFilters.category = filters.category;
     if (filters.sentiment !== 'all') apiFilters.sentiment = filters.sentiment;
     if (filters.riskLevel !== 'all') apiFilters.risk_level = filters.riskLevel;
-    if (filters.dateRange.start) apiFilters.start_date = filters.dateRange.start;
-    if (filters.dateRange.end) apiFilters.end_date = filters.dateRange.end;
+    if (filters.dateRange?.start) apiFilters.start_date = filters.dateRange.start;
+    if (filters.dateRange?.end) apiFilters.end_date = filters.dateRange.end;
     if (filters.sortBy) apiFilters.sort_by = filters.sortBy;
     if (filters.sortOrder) apiFilters.sort_order = filters.sortOrder;
     
     return apiFilters;
-  };
+  }, [filters]);
 
   return { 
     filters, 

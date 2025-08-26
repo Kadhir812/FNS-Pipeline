@@ -98,7 +98,14 @@ def get_desired_mapping():
                 "confidence": {"type": "float"},
                 "risk_score": {"type": "float"},
                 "link": {"type": "keyword"},
-                "image_url": {"type": "keyword"}
+                "image_url": {"type": "keyword"},
+                "symbol": {"type": "keyword"},
+                "entity_name": {
+                    "type": "text",
+                    "fields": {
+                        "keyword": {"type": "keyword"}
+                    }
+                }
             }
         }
     }
