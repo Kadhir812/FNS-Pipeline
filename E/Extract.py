@@ -6,6 +6,9 @@ from datetime import datetime
 import re
 import hashlib
 import os
+from langchain_community.llms import Ollama  # Changed
+from langchain.prompts import PromptTemplate
+from langchain.chains import LLMChain, SequentialChain
 
 KAFKA_BROKER = 'localhost:29092'
 TOPIC = 'Financenews-raw'
@@ -47,7 +50,7 @@ def fetch_news():
     return data.get("data", [])
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "deepseek-r1:1.5"
+OLLAMA_MODEL = "deepseek-r1:1.5b"
 
 def ollama_query(prompt, text):
     try:
@@ -210,22 +213,7 @@ def enrich_news(payload, article_num, total_articles):
     
     start_time = time.time()
 
-    # KEY PHRASES - Advanced NER with financial focus
-    print(f"   🔍 Extracting key phrases...")
-    try:
-        key_phrases_prompt = (
-            "Extract financial entities: tickers, amounts, percentages, companies, dates, actions.\n"
-            "Format: lowercase, comma-separated, max 15 items.\n"
-            "Text: " + text + "\n"
-            "Entities:"
-        )
-        payload['key_phrases'] = ollama_query(key_phrases_prompt, text)
-        print(f"   ✅ Key phrases: {payload['key_phrases'][:50]}...")
-    except Exception as e:
-        print(f"   ❌ Key phrases error: {e}")
-        payload['key_phrases'] = "N/A"
-
-    # CATEGORY - ML-based classification with DistilBART
+    # CATEGORY - ML-based classification with DistilBART (keep as is)
     print(f"   📂 Classifying news category...")
     distilbart_category = classify_with_distilbart(text)
     if distilbart_category:
@@ -251,12 +239,68 @@ def enrich_news(payload, article_num, total_articles):
             print(f"   ❌ Category classification error: {e}")
             payload['category'] = "J"
 
+    # Use LangChain for the remaining enrichment if available
+    if USE_LANGCHAIN:
+        try:
+            print("   🔄 Processing with LangChain...")
+            # Process the text with our sequential chain
+            results = NEWS_PROCESSING_CHAIN.invoke({"text": text})  # Changed from () to .invoke()
+            
+            # Extract results
+            payload['key_phrases'] = clean_ollama_response(results.get('key_phrases', 'N/A'))
+            print(f"   ✅ Key phrases: {payload['key_phrases'][:50]}...")
+            
+            payload['summary'] = clean_ollama_response(results.get('summary', 'Financial news update'))
+            print(f"   ✅ Summary: {payload['summary'][:60]}...")
+            
+            # Additional validation for impact (keep your logic)
+            raw_impact = results.get('impact_assessment', 'NEUTRAL')
+            if "POSITIVE" in raw_impact.upper():
+                payload['impact_assessment'] = "POSITIVE"
+            elif "NEGATIVE" in raw_impact.upper():
+                payload['impact_assessment'] = "NEGATIVE"
+            else:
+                payload['impact_assessment'] = "NEUTRAL"
+            print(f"   ✅ Impact: {payload['impact_assessment']}")
+            
+        except Exception as e:
+            print(f"   ❌ LangChain processing error: {e}")
+            print("   🔄 Falling back to individual Ollama calls...")
+            # Fall back to the original processing method
+            fallback_to_individual_processing(payload, text)
+    else:
+        # Use the original individual processing methods
+        fallback_to_individual_processing(payload, text)
+
+    processing_time = time.time() - start_time
+    print(f"   ⏱️  Processing time: {processing_time:.2f}s")
+    print(f"   🎉 Article {article_num}/{total_articles} COMPLETED!")
+    
+    return payload
+
+def fallback_to_individual_processing(payload, text):
+    """Fallback to individual Ollama calls when LangChain is unavailable"""
+    # KEY PHRASES - Advanced NER with financial focus
+    print(f"   🔍 Extracting key phrases...")
+    try:
+        key_phrases_prompt = (
+            "Extract financial entities: tickers, amounts, percentages, companies, dates, actions.\n"
+            "Format: lowercase, comma-separated, max 15 items.\n"
+            "Text: + text\n"
+            "Entities:"
+        )
+        payload['key_phrases'] = ollama_query(key_phrases_prompt, text)
+        print(f"   ✅ Key phrases: {payload['key_phrases'][:50]}...")
+    except Exception as e:
+        print(f"   ❌ Key phrases error: {e}")
+        payload['key_phrases'] = "N/A"
+
     # SUMMARY - Constraint-based generation
     print(f"   📋 Generating summary...")
     try:
         summary_prompt = (
             "One sentence summary: Subject + Action + Impact (<15 words).\n"
-            "Text: " + text + "\n"
+            "Text: + text\n"
             "Summary:"
         )
         payload['summary'] = ollama_query(summary_prompt, text)
@@ -271,7 +315,7 @@ def enrich_news(payload, article_num, total_articles):
         impact_prompt = (
             "Market impact: POSITIVE/NEGATIVE/NEUTRAL\n"
             "Consider: earnings, ratings, M&A, regulations, guidance.\n"
-            "Text: " + text + "\n"
+            "Text: + text\n"
             "Impact:"
         )
         raw_impact = ollama_query(impact_prompt, text)
@@ -286,12 +330,6 @@ def enrich_news(payload, article_num, total_articles):
     except Exception as e:
         print(f"   ❌ Impact error: {e}")
         payload['impact_assessment'] = "NEUTRAL"
-
-    processing_time = time.time() - start_time
-    print(f"   ⏱️  Processing time: {processing_time:.2f}s")
-    print(f"   🎉 Article {article_num}/{total_articles} COMPLETED!")
-    
-    return payload
 
 def get_doc_id(article):
     # Use title + content for uniqueness (or title + publishedAt if you prefer)
@@ -313,14 +351,103 @@ def load_existing_doc_ids(path):
         pass
     return doc_ids
 
+# Initialize Ollama model
+def get_ollama_model():
+    return Ollama(model=OLLAMA_MODEL, base_url="http://localhost:11434")
+
+# Create the LangChain processing pipeline - place this after your ollama_query function
+def create_news_processing_chain():
+    # Initialize the LLM
+    llm = get_ollama_model()
+    
+    # KEY PHRASES CHAIN
+    key_phrases_template = """Extract financial entities: tickers, amounts, percentages, companies, dates, actions.
+Format: lowercase, comma-separated, max 15 items.
+
+Text: {text}
+
+Entities:"""
+    
+    key_phrases_prompt = PromptTemplate(
+        template=key_phrases_template,
+        input_variables=["text"]
+    )
+    
+    key_phrases_chain = LLMChain(
+        llm=llm,
+        prompt=key_phrases_prompt,
+        output_key="key_phrases"
+    )
+    
+    # SUMMARY CHAIN
+    summary_template = """One sentence summary: Subject + Action + Impact (<15 words).
+
+Text: {text}
+
+Summary:"""
+    
+    summary_prompt = PromptTemplate(
+        template=summary_template,
+        input_variables=["text"]
+    )
+    
+    summary_chain = LLMChain(
+        llm=llm,
+        prompt=summary_prompt,
+        output_key="summary"
+    )
+    
+    # IMPACT CHAIN
+    impact_template = """Market impact: POSITIVE/NEGATIVE/NEUTRAL
+Consider: earnings, ratings, M&A, regulations, guidance.
+
+Text: {text}
+
+Impact:"""
+    
+    impact_prompt = PromptTemplate(
+        template=impact_template,
+        input_variables=["text"]
+    )
+    
+    impact_chain = LLMChain(
+        llm=llm,
+        prompt=impact_prompt,
+        output_key="impact_assessment"
+    )
+    
+    # Chain them together
+    return SequentialChain(
+        chains=[key_phrases_chain, summary_chain, impact_chain],
+        input_variables=["text"],
+        output_variables=["key_phrases", "summary", "impact_assessment"]
+    )
+
+# Initialize the chain once - add this after the create_news_processing_chain function
+try:
+    NEWS_PROCESSING_CHAIN = create_news_processing_chain()
+    USE_LANGCHAIN = True
+    print("✅ LangChain processing chain initialized successfully")
+except Exception as e:
+    USE_LANGCHAIN = False
+    print(f"⚠️ LangChain initialization failed: {e}")
+    print("⚠️ Falling back to direct Ollama calls")
+
 def main():
     archive_path = 'news_archive.jsonl'
     
-    # Indicate classification method
+    # Indicate classification and processing methods
     if USE_DISTILBART:
         print(f"🤖 Using DistilBART for news classification (path: {DISTILBART_PATH})")
     else:
         print("📝 Using rule-based fallback for news classification (DistilBART not found)")
+        
+    if USE_LANGCHAIN:
+        print("⚡ Using LangChain for sequential processing pipeline")
+    else:
+        print("🔄 Using direct Ollama calls for processing")
+        
+    # Rest of your main function remains the same...
     while True:
         try:
             print(f"\n🚀 Starting new batch at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
