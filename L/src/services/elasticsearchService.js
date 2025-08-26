@@ -11,6 +11,9 @@ class ElasticsearchService {
   // Search articles with filters and sorting
   async searchArticles(query = {}) {
     try {
+      // Add debug logging first
+      console.log('Raw filter params:', query);
+
       const {
         q = '',
         sentiment = '',
@@ -24,6 +27,9 @@ class ElasticsearchService {
         page = 1,
         page_size = 20
       } = query;
+
+      // Log original and processed query params
+      console.log('Original query params:', query);
 
       const must = [];
       const filter = [];
@@ -53,49 +59,74 @@ class ElasticsearchService {
 
       // Sentiment filter
       if (sentiment) {
+        console.log('Filtering by sentiment:', sentiment);
         if (sentiment === 'positive') {
           filter.push({
-            range: { sentiment: { gt: 0.1 } }
+            range: { sentiment: { gt: 0 } }  // All positive values
           });
         } else if (sentiment === 'negative') {
           filter.push({
-            range: { sentiment: { lt: -0.1 } }
+            range: { sentiment: { lt: 0 } }  // All negative values
           });
         } else if (sentiment === 'neutral') {
           filter.push({
-            range: { 
-              sentiment: { 
-                gte: -0.1,
-                lte: 0.1 
-              } 
-            }
+            range: { sentiment: { gte: -0.05, lte: 0.05 } }  // Near zero
           });
         }
       }
 
       // Category filter
       if (category) {
-        filter.push({
-          term: { 'category.keyword': category }
-        });
+        // First try to debug what's happening
+        console.log('Filtering by category:', category);
+        
+        // If category is a code (A-J) or text label
+        if (category.length === 1 && /^[A-J]$/i.test(category)) {
+          // For single letter categories
+          filter.push({
+            term: { category: category.toUpperCase() }
+          });
+        } else {
+          // For text categories (try both term and match)
+          filter.push({
+            bool: {
+              should: [
+                { term: { 'category.keyword': category } },
+                { match: { category: category } }
+              ]
+            }
+          });
+        }
       }
 
       // Source filter
       if (source) {
+        console.log('Filtering by source:', source);
+        // Try multiple approaches to match the source
         filter.push({
-          term: { 'source.keyword': source }
+          bool: {
+            should: [
+              { term: { 'source.keyword': source } }, // Try keyword field first
+              { term: { 'source': source } },         // Try exact match on text field
+              { match: { 'source': source } }         // Try fuzzy matching
+            ],
+            minimum_should_match: 1
+          }
         });
       }
 
       // Risk level filter
       if (risk_level) {
+        console.log('Filtering by risk level:', risk_level);
         let riskRange = {};
+        
+        // Update to match the ranges defined in your SENTIMENT_RANGES.md
         if (risk_level === 'low') {
-          riskRange = { lt: 0.33 };
+          riskRange = { gte: 0, lt: 0.3 };  // Updated to 0.3
         } else if (risk_level === 'medium') {
-          riskRange = { gte: 0.33, lt: 0.67 };
+          riskRange = { gte: 0.3, lt: 0.6 }; // 0.3 to 0.6
         } else if (risk_level === 'high') {
-          riskRange = { gte: 0.67 };
+          riskRange = { gte: 0.6 }; // 0.6 and above
         }
         
         if (Object.keys(riskRange).length > 0) {
@@ -146,10 +177,18 @@ class ElasticsearchService {
         }
       };
 
+      console.log('Elasticsearch query:', JSON.stringify(searchBody, null, 2));
+
       const response = await client.search({
         index: INDEX_NAME,
         body: searchBody
       });
+
+      // Log processed query params after processing
+      console.log('Processed query params:', query);
+
+      // Log the number of articles found
+      console.log(`Search returned ${response.hits.hits.length} articles out of ${response.hits.total.value} total`);
 
       return {
         articles: response.hits.hits.map(hit => ({
@@ -297,6 +336,18 @@ class ElasticsearchService {
         error: error.message,
         timestamp: new Date().toISOString()
       };
+    }
+  }
+
+  // Add a method to inspect the index mapping
+  async getIndexMapping() {
+    try {
+      return await client.indices.getMapping({
+        index: INDEX_NAME
+      });
+    } catch (error) {
+      console.error('Error getting index mapping:', error);
+      throw new Error('Failed to get index mapping');
     }
   }
 }
