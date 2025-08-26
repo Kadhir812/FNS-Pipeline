@@ -5,10 +5,16 @@ import time
 from datetime import datetime
 import re
 import hashlib
+import os
 
 KAFKA_BROKER = 'localhost:29092'
 TOPIC = 'Financenews-raw'
-MARKETAUX_API_KEY =   # <-- Add your API key here
+MARKETAUX_API_KEY =  'qyntLjkPLqpWNaiP64UufWDwnWdQsp1aLNh9p3sw' # <-- Add your API key here
+
+# Path to DistilBART model
+DISTILBART_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "T", "models", "distilbart-mnli")
+# Flag to use DistilBART for classification if available
+USE_DISTILBART = os.path.exists(DISTILBART_PATH)
 
 producer = KafkaProducer(
     bootstrap_servers=KAFKA_BROKER,
@@ -41,7 +47,7 @@ def fetch_news():
     return data.get("data", [])
 
 OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "deepseek-r1:7b"
+OLLAMA_MODEL = "deepseek-r1:1.5"
 
 def ollama_query(prompt, text):
     try:
@@ -49,7 +55,7 @@ def ollama_query(prompt, text):
             OLLAMA_URL,
             json={"model": OLLAMA_MODEL, "prompt": prompt.replace('+ text', text)},
             stream=True,
-            timeout=30
+            timeout=90
         )
         
         if response.status_code != 200:
@@ -124,6 +130,73 @@ def clean_ollama_response(response):
     
     return cleaned if cleaned else "N/A"
 
+def classify_with_distilbart(text):
+    """
+    Use DistilBART model to classify financial news into categories A-J
+    """
+    if not USE_DISTILBART or not text or len(text.strip()) < 15:
+        return None
+        
+    try:
+        # Only import if model is available
+        from transformers import pipeline
+        
+        # Load model
+        classifier = pipeline(
+            "zero-shot-classification",
+            model=DISTILBART_PATH,
+            device=-1,  # CPU
+            max_length=256,
+            truncation=True,
+            padding=True
+        )
+        
+        # Truncate text for efficiency
+        text_short = text[:200] if len(text) > 200 else text
+        
+        # 10-category financial news classification
+        categories = [
+            "earnings and quarterly results",           # A = EARNINGS
+            "analyst ratings and recommendations",      # B = ANALYST-RATINGS  
+            "mergers acquisitions and deals",          # C = M&A
+            "regulatory and legal developments",        # D = REGULATORY
+            "economic data and federal reserve",        # E = ECONOMIC-DATA
+            "corporate actions and leadership",         # F = CORPORATE-ACTIONS
+            "market trends and sector analysis",        # G = MARKET-TRENDS
+            "ipo and new listings",                    # H = IPO-LISTINGS
+            "product launches and innovation",          # I = PRODUCT-NEWS
+            "general business and industry news"        # J = GENERAL-BUSINESS
+        ]
+        
+        # Category mapping
+        category_map = {
+            "earnings and quarterly results": "A",
+            "analyst ratings and recommendations": "B",
+            "mergers acquisitions and deals": "C",
+            "regulatory and legal developments": "D",
+            "economic data and federal reserve": "E",
+            "corporate actions and leadership": "F",
+            "market trends and sector analysis": "G",
+            "ipo and new listings": "H",
+            "product launches and innovation": "I",
+            "general business and industry news": "J"
+        }
+        
+        # Classify with DistilBART
+        result = classifier(text_short, categories)
+        predicted_category = result['labels'][0]
+        confidence = result['scores'][0]
+        
+        # Map to letter code
+        final_category = category_map.get(predicted_category, "J")
+        
+        print(f"   🤖 DistilBART Classification: {final_category} ({predicted_category.split()[0]}) - {confidence:.2f}")
+        return final_category
+        
+    except Exception as e:
+        print(f"   ❌ DistilBART error: {e}")
+        return None
+
 def enrich_news(payload, article_num, total_articles):
     text = clean_text(payload.get('content', '') or payload.get('description', ''))
     
@@ -152,24 +225,31 @@ def enrich_news(payload, article_num, total_articles):
         print(f"   ❌ Key phrases error: {e}")
         payload['key_phrases'] = "N/A"
 
-    # CATEGORY - Binary decision tree approach
-    print(f"   📂 Classifying category...")
-    try:
-        category_prompt = (
-            "Classify news type:\n"
-            "A=STOCK-RATING-CHANGE B=EARNINGS C=M&A D=REGULATION E=GENERAL-MARKET\n"
-            "Return single letter only.\n"
-            "Text: " + text + "\n"
-            "Class:"
-        )
-        raw_category = ollama_query(category_prompt, text)
-        # Additional validation for category
-        category_match = re.search(r'\b([ABCDE])\b', raw_category)
-        payload['category'] = category_match.group(1) if category_match else "E"
+    # CATEGORY - ML-based classification with DistilBART
+    print(f"   📂 Classifying news category...")
+    distilbart_category = classify_with_distilbart(text)
+    if distilbart_category:
+        payload['category'] = distilbart_category
         print(f"   ✅ Category: {payload['category']}")
-    except Exception as e:
-        print(f"   ❌ Category error: {e}")
-        payload['category'] = "E"
+    else:
+        # Fallback to rule-based classification if DistilBART fails
+        try:
+            # Simple rule-based classification for fallback
+            if re.search(r'\b(earnings|revenue|profit|quarterly)\b', text.lower()):
+                payload['category'] = "A"
+            elif re.search(r'\b(upgrade|downgrade|rating|analyst)\b', text.lower()):
+                payload['category'] = "B"
+            elif re.search(r'\b(merger|acquisition|deal)\b', text.lower()):
+                payload['category'] = "C"
+            elif re.search(r'\b(regulation|sec|compliance|policy)\b', text.lower()):
+                payload['category'] = "D"
+            else:
+                payload['category'] = "J"  # Default category
+            
+            print(f"   ✅ Category (fallback): {payload['category']}")
+        except Exception as e:
+            print(f"   ❌ Category classification error: {e}")
+            payload['category'] = "J"
 
     # SUMMARY - Constraint-based generation
     print(f"   📋 Generating summary...")
@@ -235,6 +315,12 @@ def load_existing_doc_ids(path):
 
 def main():
     archive_path = 'news_archive.jsonl'
+    
+    # Indicate classification method
+    if USE_DISTILBART:
+        print(f"🤖 Using DistilBART for news classification (path: {DISTILBART_PATH})")
+    else:
+        print("📝 Using rule-based fallback for news classification (DistilBART not found)")
     while True:
         try:
             print(f"\n🚀 Starting new batch at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
