@@ -621,14 +621,16 @@ def main():
             producer.flush()
             
             total_time = time.time() - total_start_time
+            total_minutes = total_time / 60  # Convert seconds to minutes
+
             print(f"\n📊 BATCH SUMMARY:")
             print(f"   📥 Total articles fetched: {len(articles)}")
             print(f"   ✅ New articles processed: {new_articles}")
             print(f"   ⏭️  Duplicate articles skipped: {skipped_articles}")
-            print(f"   ⏱️  Total batch time: {total_time:.2f}s")
-            print(f"   ⚡ Average time per article: {total_time/max(new_articles, 1):.2f}s")
-            print(f"   💤 Sleeping for 5 minutes...")
-            time.sleep(300)
+            print(f"   ⏱️  Total batch time: {total_minutes:.2f} minutes ({total_time:.2f} seconds)")
+            print(f"   ⚡ Average time per article: {(total_time/max(new_articles, 1))/60:.2f} minutes ({total_time/max(new_articles, 1):.2f} seconds)")
+            print(f"   💤 Sleeping for 10 minutes...")
+            time.sleep(600)
 
         except Exception as e:
             print(f"❌ Batch Error: {e}")
