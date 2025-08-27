@@ -99,37 +99,50 @@ def write_to_es(batch_df, batch_id):
             'description': '', 
             'title': '',
             'risk_score': 0.0,
-            'impact_assessment': 'NEUTRAL'
+            'impact_assessment': 'NEUTRAL',
+            'symbol': ''
         })
 
-        # Calculate risk score using SQL expressions
+        # CHANGE 1: Improved confidence normalization to ensure values in [0,1]
         enriched_df = batch_df.withColumn(
-            "risk_score",
+            "conf_norm",
+            col("confidence") / (col("confidence") + lit(100))
+        )
+
+        # CHANGE 2: Calculate risk level as a categorical first, then score
+        enriched_df = enriched_df.withColumn(
+            "risk_level",
             when(
                 (col("sentiment").cast("float") < -0.2) | keyword_condition,
-                lit(0.9)
+                lit("high_risk")
             ).when(
                 col("sentiment").cast("float") < 0,
-                lit(0.7)
-            ).otherwise(lit(0.1))
+                lit("moderate_risk")
+            ).otherwise(lit("low_risk"))
         )
 
-        # Normalize confidence to 0-1 scale
-        enriched_df = enriched_df.withColumn(
-            "conf_norm",
-            when(col("confidence") > 1, col("confidence") / 100.0).otherwise(col("confidence"))
-        )
-
-        # Adjust risk score by normalized confidence
+        # CHANGE 3: Convert risk level to numeric score
         enriched_df = enriched_df.withColumn(
             "risk_score",
-            (col("risk_score") * col("conf_norm")).cast("float")
+            when(col("risk_level") == "high_risk", 0.9)
+            .when(col("risk_level") == "moderate_risk", 0.7)
+            .otherwise(0.1)
         )
 
-        # Generate doc_id and format timestamp
+        # CHANGE 4: Hybrid risk adjustment - base risk is adjusted slightly by confidence
+        # This ensures risk isn't fully dependent on confidence, but confidence still nudges it
+        enriched_df = enriched_df.withColumn(
+            "risk_score",
+            (col("risk_score") * 0.8) + (col("risk_score") * col("conf_norm") * 0.2)
+        )
+
+        # CHANGE 5: Generate doc_id with symbol to prevent entity leakage
         enriched_df = enriched_df.withColumn(
             "doc_id",
-            sha2(concat_ws("", col("title"), coalesce(col("publishedAt"), lit("default"))), 256)
+            sha2(concat_ws("_", 
+                          coalesce(col("symbol"), lit("")), 
+                          col("title"), 
+                          coalesce(col("publishedAt"), lit("default"))), 256)
         ).withColumn(
             "publishedAt",
             coalesce(
@@ -139,52 +152,53 @@ def write_to_es(batch_df, batch_id):
             ).cast("long") * 1000
         )
         
-        # Enhanced impact assessment with keyword overrides
+        # CHANGE 6: Refined impact assessment with better thresholds
         enriched_df = enriched_df.withColumn(
             "impact_assessment",
-            when(
-                lower(col("title")).rlike("(?i)may|might|could|expected|likely|rumor|speculation") |
-                lower(col("content")).rlike("(?i)may|might|could|expected|likely|rumor|speculation"),
-                "SPECULATIVE"
-            )
-            .when(col("conf_norm") < 0.5, "UNCERTAIN")
-            .when(col("risk_score") > 0.8, "HIGH RISK")
+            when(col("risk_score") > 0.8, "HIGH RISK")
             .when(col("risk_score") > 0.5, "MODERATE RISK")
-            # Keyword overrides in title
-            .when(lower(col("title")).rlike("(?i)bullish|surge|rally|soars|positive"), "BULLISH")
-            .when(lower(col("title")).rlike("(?i)bearish|drop|fall|slump|negative|downgrade"), "BEARISH")
-            # Sentiment-driven logic
-            .when((col("sentiment") >= 0.6) & (col("conf_norm") >= 0.75), "BULLISH")
-            .when((col("sentiment") >= 0.1) & (col("conf_norm") >= 0.5), "SLIGHTLY POSITIVE")
-            .when((col("sentiment") <= -0.6) & (col("conf_norm") >= 0.75), "BEARISH")
-            .when((col("sentiment") <= -0.1) & (col("conf_norm") >= 0.5), "SLIGHTLY NEGATIVE")
+            .when(col("confidence") < 20, "UNCERTAIN")
+            .when(col("sentiment") >= 0.7, "BULLISH")
+            .when((col("sentiment") >= 0.4) & (col("sentiment") < 0.7), "POSITIVE")
+            .when((col("sentiment") >= 0.1) & (col("sentiment") < 0.4), "SLIGHTLY POSITIVE")
+            .when(col("sentiment") <= -0.7, "BEARISH")
+            .when((col("sentiment") <= -0.4) & (col("sentiment") > -0.7), "NEGATIVE")
+            .when((col("sentiment") <= -0.1) & (col("sentiment") > -0.4), "SLIGHTLY NEGATIVE")
             .otherwise("NEUTRAL")
         )
         
-        # Map to numeric impact_score for easy aggregations
+        # CHANGE 7: Updated impact_score mapping for the new categories
         enriched_df = enriched_df.withColumn(
             "impact_score",
-            when(col("impact_assessment") == "BULLISH", 2)
+            when(col("impact_assessment") == "BULLISH", 3)
+            .when(col("impact_assessment") == "POSITIVE", 2)
             .when(col("impact_assessment") == "SLIGHTLY POSITIVE", 1)
             .when(col("impact_assessment") == "SLIGHTLY NEGATIVE", -1)
-            .when(col("impact_assessment") == "BEARISH", -2)
-            .when(col("impact_assessment") == "HIGH RISK", -3)
+            .when(col("impact_assessment") == "NEGATIVE", -2)
+            .when(col("impact_assessment") == "BEARISH", -3)
+            .when(col("impact_assessment") == "HIGH RISK", -4)
             .when(col("impact_assessment") == "MODERATE RISK", -2)
-            .otherwise(0)  # Neutral, Speculative, Uncertain
+            .otherwise(0)  # Neutral, Uncertain
         )
         
-        # Calculate final_score - weighted blend of sentiment and risk
+        # CHANGE 8: Better balanced final_score formula
         enriched_df = enriched_df.withColumn(
             "final_score",
-            (col("impact_score") * col("conf_norm")) - (col("risk_score") * 2)
+            (col("sentiment") * 0.7 * col("conf_norm")) - (col("risk_score") * 0.5)
+        )
+        
+        # CHANGE 9: Add sentiment_confidence_score for analysis
+        enriched_df = enriched_df.withColumn(
+            "sentiment_confidence_score", 
+            col("sentiment") * col("conf_norm")
         )
         
         # Select fields for output - including new score fields
         final_df = enriched_df.select(
             "title", "description", "content", "publishedAt", "source",
-            "sentiment", "confidence", "conf_norm", "risk_score", "key_phrases",
+            "sentiment", "confidence", "conf_norm", "risk_level", "risk_score", "key_phrases",
             "category", "summary", "impact_assessment", "impact_score", "final_score", 
-            "symbol", "entity_name", "link", "image_url", "doc_id"
+            "sentiment_confidence_score", "symbol", "entity_name", "link", "image_url", "doc_id"
         )
 
         # Test Elasticsearch connection
@@ -270,6 +284,7 @@ try:
                     "sentiment": {"type": "float"},
                     "confidence": {"type": "float"},
                     "conf_norm": {"type": "float"},
+                    "risk_level": {"type": "keyword"},
                     "risk_score": {"type": "float"},
                     "key_phrases": {"type": "text"},
                     "category": {"type": "keyword"},
@@ -277,6 +292,7 @@ try:
                     "impact_assessment": {"type": "keyword"},
                     "impact_score": {"type": "integer"},
                     "final_score": {"type": "float"},
+                    "sentiment_confidence_score": {"type": "float"},
                     "symbol": {"type": "keyword"},
                     "entity_name": {"type": "keyword"},
                     "link": {"type": "keyword"},
