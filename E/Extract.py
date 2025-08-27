@@ -6,13 +6,21 @@ from datetime import datetime
 import re
 import hashlib
 import os
-# Modern LangChain imports
 from langchain_ollama import OllamaLLM
 from langchain.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 import logging
 import sys
+
+def safe_format(value, format_spec=".2f"):
+    """Safely format a value that might be None"""
+    if value is None:
+        return "None"
+    try:
+        return f"{float(value):{format_spec}}"
+    except (ValueError, TypeError):
+        return str(value)
 
 KAFKA_BROKER = 'localhost:29092'
 TOPIC = 'Financenews-raw'
@@ -308,15 +316,7 @@ def enrich_news(payload, article_num, total_articles):
         # Use the original individual processing methods for key phrases and summary
         fallback_to_individual_processing(payload, text)
 
-    # Apply impact assessment rules using MarketAux API's sentiment/confidence
-    print(f"   📊 Calculating impact assessment from MarketAux sentiment...")
-    impact = calculate_impact_assessment(
-        sentiment=payload.get('sentiment'),  # Direct from MarketAux API
-        confidence=payload.get('confidence'),  # Direct from MarketAux API
-        risk_score=payload.get('risk_score')
-    )
-    payload['impact_assessment'] = impact
-    print(f"   ✅ Impact: {impact} (from sentiment={payload.get('sentiment'):.2f}, confidence={payload.get('confidence'):.1f})")
+
     
     processing_time = time.time() - start_time
     print(f"   ⏱️  Processing time: {processing_time:.2f}s")
@@ -424,32 +424,28 @@ Summary:"""
     
     summary_chain = summary_prompt | llm | output_parser
     
-    # IMPACT CHAIN
-    impact_template = """Market impact: POSITIVE/NEGATIVE/NEUTRAL
-Consider: earnings, ratings, M&A, regulations, guidance.
 
-Text: {text}
-
-Impact:"""
     
-    impact_prompt = PromptTemplate(
-        template=impact_template,
-        input_variables=["text"]
-    )
+    # Create a properly chainable object instead of a function
+    from langchain_core.runnables import RunnableParallel, RunnableLambda
     
-    impact_chain = impact_prompt | llm | output_parser
-    
-    # Create a chain that returns a dictionary with all the results
-    def process_all(inputs):
+    # Define a function to process with individual chains
+    def process_chains(inputs):
         text = inputs["text"]
-        return {
-            "key_phrases": key_phrases_chain.invoke({"text": text}),
-            "summary": summary_chain.invoke({"text": text}),
-            "impact_assessment": impact_chain.invoke({"text": text})
-        }
+        results = {}
+        
+        # Run key phrases chain
+        results["key_phrases"] = key_phrases_chain.invoke({"text": text})
+        
+        # Run summary chain
+        results["summary"] = summary_chain.invoke({"text": text})
+        
+
+        
+        return results
     
-    # Return a simple function that processes everything
-    return lambda inputs: process_all(inputs)
+    # Return a chainable object
+    return RunnableLambda(process_chains)
 
 # Initialize the chain once - add this after the create_news_processing_chain function
 try:
@@ -461,66 +457,7 @@ except Exception as e:
     print(f"⚠️ LangChain initialization failed: {e}")
     print("⚠️ Falling back to direct Ollama calls")
 
-def calculate_impact_assessment(sentiment, confidence, risk_score=None):
-    """
-    Calculate impact assessment label based on MarketAux API's sentiment and confidence scores.
-    
-    Args:
-        sentiment: Float value from -1 to 1 (from MarketAux)
-        confidence: Float value from 0 to 100 (from MarketAux)
-        risk_score: Optional float value from 0 to 1
-    
-    Returns:
-        String impact assessment label
-    """
-    try:
-        # Convert to float to ensure proper comparison
-        sentiment = float(sentiment) if sentiment is not None else 0
-        confidence = float(confidence) if confidence is not None else 0
-        risk_score = float(risk_score) if risk_score is not None else None
-        
-        # Log the inputs
-        logger.info(f"Impact assessment inputs: sentiment={sentiment:.2f}, confidence={confidence:.1f}, risk_score={risk_score:.2f if risk_score is not None else 'None'}")
-        
-        # Check for VOLATILE / HIGH RISK condition first (overrides other conditions)
-        if risk_score is not None and risk_score > 0.5:
-            logger.info(f"Impact Assessment: VOLATILE (high risk_score: {risk_score:.2f})")
-            return "VOLATILE"
-            
-        # Check for UNCERTAIN condition
-        if confidence < 30:
-            logger.info("Impact Assessment: UNCERTAIN (low confidence)")
-            return "UNCERTAIN"
-            
-        # Check sentiment ranges with confidence thresholds
-        if sentiment >= 0.5 and confidence >= 60:
-            logger.info("Impact Assessment: STRONGLY POSITIVE")
-            return "STRONGLY POSITIVE"
-            
-        elif 0.2 <= sentiment < 0.5 and confidence >= 40:
-            logger.info("Impact Assessment: POSITIVE")
-            return "POSITIVE"
-            
-        elif -0.2 < sentiment < 0.2:
-            logger.info("Impact Assessment: NEUTRAL")
-            return "NEUTRAL"
-            
-        elif -0.5 < sentiment <= -0.2 and confidence >= 40:
-            logger.info("Impact Assessment: NEGATIVE")
-            return "NEGATIVE"
-            
-        elif sentiment <= -0.5 and confidence >= 60:
-            logger.info("Impact Assessment: STRONGLY NEGATIVE")
-            return "STRONGLY NEGATIVE"
-            
-        else:
-            # Fallback for cases not covered by the rules
-            logger.info("Impact Assessment: NEUTRAL (fallback)")
-            return "NEUTRAL"
-            
-    except Exception as e:
-        logger.error(f"Error calculating impact assessment: {str(e)}")
-        return "NEUTRAL"
+
 
 def main():
     archive_path = 'news_archive.jsonl'
@@ -564,17 +501,26 @@ def main():
                         symbol = None
                         entity_name = None
                         
-                        # Based on the API response format, entities contains symbol and name
-                        if entities and isinstance(entities, list) and len(entities) > 0:
-                            # Get the first entity data
-                            first_entity = entities[0]
-                            sentiment = first_entity.get('sentiment_score', None)
-                            confidence = first_entity.get('match_score', None)
-                            symbol = first_entity.get('symbol', None)
-                            entity_name = first_entity.get('name', None)
+                        # Based on the API response format, process entities
+                        if entities and isinstance(entities, list):
+                            entities_count = len(entities)
                             
-                            # Debug what we found in the entity
-                            print(f"   🔍 Found entity: {symbol} - {entity_name}")
+                            # Get first entity data for primary fields
+                            if entities_count > 0:
+                                first_entity = entities[0]
+                                
+                                # MarketAux API uses 'sentiment_score' and 'match_score'
+                                sentiment = first_entity.get('sentiment_score')
+                                confidence = first_entity.get('match_score')
+                                symbol = first_entity.get('symbol')
+                                entity_name = first_entity.get('name')
+                                
+                                # Debug what we found with exact values
+                                print(f"   🔍 Primary entity: {symbol} - {entity_name}")
+                                print(f"   📊 Entity data: sentiment={safe_format(sentiment)}, confidence={safe_format(confidence)}")
+                            
+                            # Debug total entities info
+                            print(f"   📊 Including all {entities_count} entities in payload")
 
                         doc_id = get_doc_id(article)
                         if doc_id in existing_doc_ids:
@@ -595,7 +541,7 @@ def main():
                             'image_url': article.get('image_url', None),
                             'symbol': symbol,
                             'entity_name': entity_name,
-                            # 'entities': entities,
+                            # 'entities': entities,  # Include all entities
                         }
 
                         # NLP enrichment with detailed debugging
@@ -607,12 +553,38 @@ def main():
                         else:
                             print(f"   ⚠️ No entity symbol/name found in article")
                             
-                        # Save and send
+                        # Save and send the primary message
                         f.write(json.dumps(payload, ensure_ascii=False) + '\n')
                         producer.send(TOPIC, value=payload)
                         new_articles += 1
+                        sent_messages = 1
                         
-                        print(f"   💾 Saved to archive & sent to Kafka")
+                        # Send additional messages for each entity
+                        entities = article.get('entities', [])
+                        if entities and isinstance(entities, list):
+                            for entity_index, entity in enumerate(entities):
+                                # Skip the first entity since it's already in the main message
+                                if entity_index == 0:
+                                    continue
+                                    
+                                # Create a new payload for this entity
+                                entity_payload = payload.copy()
+                                
+                                # Update entity-specific fields
+                                entity_payload['sentiment'] = entity.get('sentiment_score')
+                                entity_payload['confidence'] = entity.get('match_score')
+                                entity_payload['symbol'] = entity.get('symbol')
+                                entity_payload['entity_name'] = entity.get('name')
+                                
+                                # Generate a unique doc_id for this entity
+                                entity_id_string = payload['doc_id'] + f"_entity_{entity_index}"
+                                entity_payload['doc_id'] = entity_id_string
+                                
+                                # Send to Kafka
+                                producer.send(TOPIC, value=entity_payload)
+                                sent_messages += 1
+                        
+                        print(f"   💾 Saved primary article to archive & sent {sent_messages} total messages to Kafka ({len(entities)} entities found, {sent_messages-1} additional entity messages)")
                         
                     except Exception as article_error:
                         print(f"❌ Error processing article {i}: {article_error}")
@@ -639,3 +611,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+

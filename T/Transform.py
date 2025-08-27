@@ -4,6 +4,16 @@ from pyspark.sql.types import StructType, StringType, StructField, DoubleType
 from pyspark.sql.functions import sha2, concat_ws
 import re
 import os
+import shutil
+
+# Clear checkpoint directory to avoid any stale state
+CHECKPOINT_PATH = "D:/big data pipeline/T/checkpoint"
+if os.path.exists(CHECKPOINT_PATH):
+    try:
+        shutil.rmtree(CHECKPOINT_PATH)
+        print("Checkpoint directory cleared")
+    except Exception as e:
+        print(f"Could not clear checkpoint: {str(e)}")
 
 # === Spark Session ===
 JARS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "jars"))
@@ -30,17 +40,17 @@ schema = StructType([
     StructField("content", StringType()),
     StructField("publishedAt", StringType()),
     StructField("source", StringType()),
-    StructField("sentiment", DoubleType()),   # changed
-    StructField("confidence", DoubleType()),  # changed
-    StructField("risk_score", DoubleType()),  # keep consistent
+    StructField("sentiment", DoubleType()),   
+    StructField("confidence", DoubleType()),  
+    StructField("risk_score", DoubleType()),
     StructField("link", StringType()),
     StructField("image_url", StringType()),
-    StructField("key_phrases", StringType()),      # <-- enabled
-    StructField("category", StringType()),         # <-- enabled
-    StructField("summary", StringType()),          # <-- enabled
-    StructField("impact_assessment", StringType()),# <-- enabled
-    StructField("symbol", StringType()),           # <-- new field for ticker symbol
-    StructField("entity_name", StringType()),      # <-- new field for company name
+    StructField("key_phrases", StringType()),
+    StructField("category", StringType()),
+    StructField("summary", StringType()),
+    StructField("impact_assessment", StringType()),
+    StructField("symbol", StringType()),
+    StructField("entity_name", StringType()),
     StructField("doc_id", StringType())
 ])
 
@@ -57,11 +67,14 @@ df_json = df_raw.selectExpr("CAST(value AS STRING) as json") \
     .withColumn("data", from_json(col("json"), schema)) \
     .select("data.*")
 
-# === Risk Keywords ===
-# Read keywords from file
+# === Read risk keywords from file ===
 KEYWORDS_PATH = os.path.join(os.path.dirname(__file__), "risk_keywords.txt")
-with open(KEYWORDS_PATH, 'r') as f:
-    keywords = [line.strip().lower() for line in f if line.strip()]
+try:
+    with open(KEYWORDS_PATH, 'r') as f:
+        keywords = [line.strip().lower() for line in f if line.strip()]
+except:
+    keywords = ["risk", "loss", "default", "bankruptcy", "crash"]
+    print(f"Warning: Could not load risk keywords, using default list")
 
 # Build condition for any keyword match in content or title
 keyword_condition = None
@@ -69,81 +82,221 @@ for word in keywords:
     cond = (lower(col("content")).contains(word)) | (lower(col("title")).contains(word))
     keyword_condition = cond if keyword_condition is None else (keyword_condition | cond)
 
-# === Write to Elasticsearch ===
+# === Map sentiment to impact assessment directly in SQL expressions ===
 def write_to_es(batch_df, batch_id):
-    print(f"Batch {batch_id} received, count: {batch_df.count()}")
-    if batch_df.count() == 0:
-        print("Batch is empty, skipping.")
-        return
-
-    batch_df = batch_df.fillna({'sentiment': '0', 'confidence': '100'})
-
-    enriched_df = batch_df.withColumn(
-        "risk_score",
-        when(
-            (col("sentiment").cast("float") < -0.2) | keyword_condition,
-            0.9
-        ).when(
-            col("sentiment").cast("float") < 0,
-            0.7
-        ).otherwise(0.1)
-    )
-
-    enriched_df = enriched_df.withColumn(
-        "risk_score",
-        (col("risk_score") * (col("confidence").cast("float") / 100)).cast("float")
-    )
-
-    enriched_df = enriched_df.withColumn(
-        "doc_id",
-        sha2(concat_ws("", col("title"), coalesce(col("publishedAt"), lit("default"))), 256)
-    ).withColumn(
-        "publishedAt",
-        coalesce(
-            to_timestamp(col("publishedAt"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'"),
-            to_timestamp(col("publishedAt"), "yyyy-MM-dd'T'HH:mm:ss'Z'"),
-            to_timestamp(col("publishedAt"), "yyyy-MM-dd HH:mm:ss")
-        ).cast("long") * 1000
-    )
-
-    # Select all original + new fields for output
-    final_df = enriched_df.select(
-        "title", "description", "content", "publishedAt", "source",
-        "sentiment", "confidence", "risk_score", "key_phrases",
-        "category", "summary", "impact_assessment", "symbol", "entity_name",
-        "link", "image_url", "doc_id"
-    )
-
-    # === Debug: Show sample batch for new fields ===
-    print("Final DataFrame Preview:")
-    final_df.select(
-        "title", "symbol", "entity_name", "key_phrases", "category", "summary", "impact_assessment"
-    ).show(truncate=False)
-
     try:
-        final_df.write \
-            .format("org.elasticsearch.spark.sql") \
-            .option("es.nodes", "localhost") \
-            .option("es.port", "9200") \
-            .option("es.nodes.wan.only", "true") \
-            .option("es.net.ssl", "false") \
-            .option("es.mapping.id", "doc_id") \
-            .option("es.write.operation", "upsert") \
-            .option("es.index.auto.create", "false") \
-            .option("es.resource", "news-analysis") \
-            .mode("append") \
-            .save()
-        print(" Batch written to Elasticsearch")
+        if batch_df.count() == 0:
+            print("Batch is empty, skipping.")
+            return
+
+        print(f"Processing batch {batch_id} with {batch_df.count()} records")
+
+        # Fill in nulls to avoid errors
+        batch_df = batch_df.fillna({
+            'sentiment': 0.0, 
+            'confidence': 0.0, 
+            'content': '', 
+            'description': '', 
+            'title': '',
+            'risk_score': 0.0,
+            'impact_assessment': 'NEUTRAL'
+        })
+
+        # Calculate risk score using SQL expressions
+        enriched_df = batch_df.withColumn(
+            "risk_score",
+            when(
+                (col("sentiment").cast("float") < -0.2) | keyword_condition,
+                lit(0.9)
+            ).when(
+                col("sentiment").cast("float") < 0,
+                lit(0.7)
+            ).otherwise(lit(0.1))
+        )
+
+        # Normalize confidence to 0-1 scale
+        enriched_df = enriched_df.withColumn(
+            "conf_norm",
+            when(col("confidence") > 1, col("confidence") / 100.0).otherwise(col("confidence"))
+        )
+
+        # Adjust risk score by normalized confidence
+        enriched_df = enriched_df.withColumn(
+            "risk_score",
+            (col("risk_score") * col("conf_norm")).cast("float")
+        )
+
+        # Generate doc_id and format timestamp
+        enriched_df = enriched_df.withColumn(
+            "doc_id",
+            sha2(concat_ws("", col("title"), coalesce(col("publishedAt"), lit("default"))), 256)
+        ).withColumn(
+            "publishedAt",
+            coalesce(
+                to_timestamp(col("publishedAt"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'"),
+                to_timestamp(col("publishedAt"), "yyyy-MM-dd'T'HH:mm:ss'Z'"),
+                to_timestamp(col("publishedAt"), "yyyy-MM-dd HH:mm:ss")
+            ).cast("long") * 1000
+        )
+        
+        # Enhanced impact assessment with keyword overrides
+        enriched_df = enriched_df.withColumn(
+            "impact_assessment",
+            when(
+                lower(col("title")).rlike("(?i)may|might|could|expected|likely|rumor|speculation") |
+                lower(col("content")).rlike("(?i)may|might|could|expected|likely|rumor|speculation"),
+                "SPECULATIVE"
+            )
+            .when(col("conf_norm") < 0.5, "UNCERTAIN")
+            .when(col("risk_score") > 0.8, "HIGH RISK")
+            .when(col("risk_score") > 0.5, "MODERATE RISK")
+            # Keyword overrides in title
+            .when(lower(col("title")).rlike("(?i)bullish|surge|rally|soars|positive"), "BULLISH")
+            .when(lower(col("title")).rlike("(?i)bearish|drop|fall|slump|negative|downgrade"), "BEARISH")
+            # Sentiment-driven logic
+            .when((col("sentiment") >= 0.6) & (col("conf_norm") >= 0.75), "BULLISH")
+            .when((col("sentiment") >= 0.1) & (col("conf_norm") >= 0.5), "SLIGHTLY POSITIVE")
+            .when((col("sentiment") <= -0.6) & (col("conf_norm") >= 0.75), "BEARISH")
+            .when((col("sentiment") <= -0.1) & (col("conf_norm") >= 0.5), "SLIGHTLY NEGATIVE")
+            .otherwise("NEUTRAL")
+        )
+        
+        # Map to numeric impact_score for easy aggregations
+        enriched_df = enriched_df.withColumn(
+            "impact_score",
+            when(col("impact_assessment") == "BULLISH", 2)
+            .when(col("impact_assessment") == "SLIGHTLY POSITIVE", 1)
+            .when(col("impact_assessment") == "SLIGHTLY NEGATIVE", -1)
+            .when(col("impact_assessment") == "BEARISH", -2)
+            .when(col("impact_assessment") == "HIGH RISK", -3)
+            .when(col("impact_assessment") == "MODERATE RISK", -2)
+            .otherwise(0)  # Neutral, Speculative, Uncertain
+        )
+        
+        # Calculate final_score - weighted blend of sentiment and risk
+        enriched_df = enriched_df.withColumn(
+            "final_score",
+            (col("impact_score") * col("conf_norm")) - (col("risk_score") * 2)
+        )
+        
+        # Select fields for output - including new score fields
+        final_df = enriched_df.select(
+            "title", "description", "content", "publishedAt", "source",
+            "sentiment", "confidence", "conf_norm", "risk_score", "key_phrases",
+            "category", "summary", "impact_assessment", "impact_score", "final_score", 
+            "symbol", "entity_name", "link", "image_url", "doc_id"
+        )
+
+        # Test Elasticsearch connection
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2)
+            s.connect(("localhost", 9200))
+            s.close()
+            print("Elasticsearch port is reachable")
+        except Exception as e:
+            print(f"ERROR: Cannot connect to Elasticsearch: {e}")
+            return
+
+        # DEBUG: Print sample row for inspection
+        try:
+            sample_row = final_df.limit(1)
+            sample_row_dict = sample_row.toPandas().to_dict('records')
+            if sample_row_dict:
+                print("Sample row for debugging:")
+                for k, v in sample_row_dict[0].items():
+                    if isinstance(v, str) and len(v) > 50:
+                        print(f"  {k}: {v[:50]}...")
+                    else:
+                        print(f"  {k}: {v}")
+        except Exception as e:
+            print(f"Could not print sample data: {e}")
+
+        # Write to Elasticsearch with more resilient options
+        try:
+            print("Writing batch to Elasticsearch...")
+            final_df.write \
+                .format("org.elasticsearch.spark.sql") \
+                .option("es.nodes", "localhost") \
+                .option("es.port", "9200") \
+                .option("es.nodes.wan.only", "true") \
+                .option("es.net.ssl", "false") \
+                .option("es.mapping.id", "doc_id") \
+                .option("es.write.operation", "upsert") \
+                .option("es.index.auto.create", "true") \
+                .option("es.resource", "news-analysis") \
+                .option("es.batch.size.entries", "100") \
+                .option("es.batch.write.retry.count", "3") \
+                .option("es.http.timeout", "60s") \
+                .option("es.mapping.date.rich", "false") \
+                .mode("append") \
+                .save()
+            print("Batch successfully written to Elasticsearch")
+        except Exception as e:
+            import traceback
+            print(f"ERROR writing to Elasticsearch: {e}")
+            traceback.print_exc()
     except Exception as e:
-        print(f"Error writing batch: {e}")
-        # Temporary debug output
-        final_df.write.mode("overwrite").json("file:///tmp/debug_output")
+        import traceback
+        print(f"ERROR in write_to_es: {e}")
+        traceback.print_exc()
 
 # === Start Stream ===
 query = df_json.writeStream \
     .outputMode("append") \
     .foreachBatch(write_to_es) \
-    .option("checkpointLocation", "D:/big data pipeline/T/checkpoint") \
+    .option("checkpointLocation", CHECKPOINT_PATH) \
     .start()
 
-query.awaitTermination() 
+# Create direct index with Python instead of using the Spark connector
+import requests
+import json
+try:
+    # Check if index exists
+    index_exists = requests.head("http://localhost:9200/news-analysis")
+    
+    if index_exists.status_code == 404:
+        print("Creating Elasticsearch index manually...")
+        # Create index with mappings
+        index_mappings = {
+            "mappings": {
+                "properties": {
+                    "title": {"type": "text"},
+                    "description": {"type": "text"},
+                    "content": {"type": "text"},
+                    "publishedAt": {"type": "date", "format": "epoch_millis"},
+                    "source": {"type": "keyword"},
+                    "sentiment": {"type": "float"},
+                    "confidence": {"type": "float"},
+                    "conf_norm": {"type": "float"},
+                    "risk_score": {"type": "float"},
+                    "key_phrases": {"type": "text"},
+                    "category": {"type": "keyword"},
+                    "summary": {"type": "text"},
+                    "impact_assessment": {"type": "keyword"},
+                    "impact_score": {"type": "integer"},
+                    "final_score": {"type": "float"},
+                    "symbol": {"type": "keyword"},
+                    "entity_name": {"type": "keyword"},
+                    "link": {"type": "keyword"},
+                    "image_url": {"type": "keyword"},
+                    "doc_id": {"type": "keyword"}
+                }
+            }
+        }
+        
+        create_response = requests.put(
+            "http://localhost:9200/news-analysis",
+            data=json.dumps(index_mappings),
+            headers={"Content-Type": "application/json"}
+        )
+        print(f"Index creation response: {create_response.status_code}")
+        print(f"Response text: {create_response.text}")
+    else:
+        print(f"Index already exists: status code {index_exists.status_code}")
+except Exception as e:
+    print(f"Could not create Elasticsearch index: {e}")
+
+print("Streaming query started, awaiting termination...")
+query.awaitTermination()
