@@ -1,5 +1,5 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, lower, when, to_timestamp, coalesce, lit
+from pyspark.sql.functions import col, from_json, lower, when, to_timestamp, coalesce, lit, log
 from pyspark.sql.types import StructType, StringType, StructField, DoubleType
 from pyspark.sql.functions import sha2, concat_ws
 import re
@@ -103,12 +103,15 @@ def write_to_es(batch_df, batch_id):
             'symbol': ''
         })
 
-        # CHANGE 1: Improved confidence normalization to ensure values in [0,1]
+        # CHANGE 1: Improved confidence normalization using logarithmic scaling
+        # This prevents saturation and maintains resolution across the confidence range
+        max_conf = 200  # Tunable parameter based on your data distribution
+        from pyspark.sql.functions import log
+
         enriched_df = batch_df.withColumn(
             "conf_norm",
-            when(col("confidence") > 100, 1.0)
-            .when(col("confidence") < 0, 0.0)
-            .otherwise(col("confidence") / 100.0)
+            when(col("confidence").isNull() | (col("confidence") <= 0), 0.0)
+            .otherwise(log(1 + col("confidence")) / log(1 + lit(max_conf)))
         )
 
         # CHANGE 2: Calculate risk level as a categorical first
@@ -141,22 +144,39 @@ def write_to_es(batch_df, batch_id):
         enriched_df = enriched_df.withColumn("risk_raw", col("risk_base"))
         enriched_df = enriched_df.withColumn("risk_adj", col("risk_score"))
 
+        # CHANGE 5: Generate unique doc_id using symbol+source+title to prevent duplicates
+        enriched_df = enriched_df.withColumn(
+            "doc_id",
+            sha2(concat_ws("_", 
+                          coalesce(col("symbol"), lit("")), 
+                          coalesce(col("source"), lit("")),
+                          col("title"), 
+                          coalesce(col("publishedAt"), lit("default"))), 256)
+        ).withColumn(
+            "publishedAt",
+            coalesce(
+                to_timestamp(col("publishedAt"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'"),
+                to_timestamp(col("publishedAt"), "yyyy-MM-dd'T'HH:mm:ss'Z'"),
+                to_timestamp(col("publishedAt"), "yyyy-MM-dd HH:mm:ss")
+            ).cast("long") * 1000
+        )
+
         # CHANGE 6: Add a config flag to control prioritization
         # Set to true if risk should override sentiment (even if bullish)
         risk_priority = True  
 
-        # Refined impact assessment with optional ordering based on business requirement
+        # Refined impact assessment with five sentiment tiers plus risk overlay
         if risk_priority:
             # Risk takes priority - original ordering
             enriched_df = enriched_df.withColumn(
                 "impact_assessment",
-                when(col("risk_score") > 0.8, "HIGH RISK")
-                .when(col("risk_score") > 0.5, "MODERATE RISK")
-                .when(col("confidence") < 20, "UNCERTAIN")
+                when(col("risk_raw") >= 0.8, "HIGH RISK")
+                .when(col("risk_raw") >= 0.5, "MODERATE RISK")
+                .when(col("confidence") < 20, "NEUTRAL")  # Was UNCERTAIN, now NEUTRAL
                 .when(col("sentiment") >= 0.7, "BULLISH")
                 .when((col("sentiment") >= 0.4) & (col("sentiment") < 0.7), "POSITIVE")
                 .when((col("sentiment") >= 0.1) & (col("sentiment") < 0.4), "SLIGHTLY POSITIVE")
-                .when(col("sentiment") <= -0.7, "BEARISH")
+                .when((col("sentiment") <= -0.7), "BEARISH")
                 .when((col("sentiment") <= -0.4) & (col("sentiment") > -0.7), "NEGATIVE")
                 .when((col("sentiment") <= -0.1) & (col("sentiment") > -0.4), "SLIGHTLY NEGATIVE")
                 .otherwise("NEUTRAL")
@@ -165,18 +185,18 @@ def write_to_es(batch_df, batch_id):
             # Sentiment-first evaluation with risk as secondary factor
             enriched_df = enriched_df.withColumn(
                 "impact_assessment",
-                when(col("confidence") < 20, "UNCERTAIN")
+                when(col("confidence") < 20, "NEUTRAL")  # Was UNCERTAIN, now NEUTRAL
                 .when(col("sentiment") >= 0.7, "BULLISH")
                 .when((col("sentiment") >= 0.4) & (col("sentiment") < 0.7), "POSITIVE")
                 .when((col("sentiment") >= 0.1) & (col("sentiment") < 0.4), "SLIGHTLY POSITIVE")
                 .when(col("sentiment") <= -0.7, "BEARISH")
                 .when((col("sentiment") <= -0.4) & (col("sentiment") > -0.7), "NEGATIVE")
                 .when((col("sentiment") <= -0.1) & (col("sentiment") > -0.4), "SLIGHTLY NEGATIVE")
-                .when(col("risk_score") > 0.8, "HIGH RISK")
-                .when(col("risk_score") > 0.5, "MODERATE RISK")
+                .when(col("risk_raw") >= 0.8, "HIGH RISK")
+                .when(col("risk_raw") >= 0.5, "MODERATE RISK")
                 .otherwise("NEUTRAL")
             )
-        
+
         # CHANGE 7: Updated impact_score mapping with more granular values
         enriched_df = enriched_df.withColumn(
             "impact_score",
@@ -184,7 +204,6 @@ def write_to_es(batch_df, batch_id):
             .when(col("impact_assessment") == "POSITIVE", 1.0)
             .when(col("impact_assessment") == "SLIGHTLY POSITIVE", 0.5)
             .when(col("impact_assessment") == "NEUTRAL", 0.0)
-            .when(col("impact_assessment") == "UNCERTAIN", 0.0)
             .when(col("impact_assessment") == "SLIGHTLY NEGATIVE", -0.5)
             .when(col("impact_assessment") == "NEGATIVE", -1.0)
             .when(col("impact_assessment") == "BEARISH", -2.0)
@@ -192,14 +211,14 @@ def write_to_es(batch_df, batch_id):
             .when(col("impact_assessment") == "MODERATE RISK", -1.5)
             .otherwise(0.0)
         )
-        
-        # CHANGE 8: Improved final_score formula with configurable risk weight
+
+        # CHANGE 8: Improved final_score formula - confidence affects sentiment, not risk
         risk_weight = 2.0  # Tunable parameter
         enriched_df = enriched_df.withColumn(
             "final_score",
-            (col("impact_score") * col("conf_norm")) - (col("risk_base") * risk_weight)
+            (col("impact_score") * col("conf_norm")) - (col("risk_raw") * risk_weight)
         )
-        
+
         # CHANGE 9: Add sentiment_confidence_score for analysis
         enriched_df = enriched_df.withColumn(
             "sentiment_confidence_score", 
