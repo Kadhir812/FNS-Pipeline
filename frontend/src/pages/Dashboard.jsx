@@ -36,6 +36,9 @@ const Dashboard = () => {
     })
     .filter(Boolean);
 
+  // Debug: Log unique impact_assessment values
+  console.log('Unique impact_assessment values:', Array.from(new Set(articles.map(a => a.impact_assessment))));
+
   // Handle filter changes
   const handleFilterChange = (key, value) => {
     if (key === 'reset') {
@@ -85,11 +88,12 @@ const Dashboard = () => {
     loadPage(page);
   };
 
-  // Filter articles by selected ticker and category
+  // Filter articles by selected ticker, category, and sentiment (impact_assessment)
   const filteredArticles = articles.filter(article => {
     const tickerMatch = !filters.ticker || filters.ticker === 'all' || article.symbol === filters.ticker;
     const categoryMatch = !filters.category || filters.category === 'all' || article.category === filters.category;
-    return tickerMatch && categoryMatch;
+    const sentimentMatch = !filters.sentiment || filters.sentiment === 'all' || article.impact_assessment === filters.sentiment;
+    return tickerMatch && categoryMatch && sentimentMatch;
   });
 
   if (loading) {
@@ -118,7 +122,8 @@ const Dashboard = () => {
           onFilterChange={handleFilterChange}
           availableFilters={{
             ...availableFilters,
-            tickers
+            tickers,
+            articles
           }}
         />
         

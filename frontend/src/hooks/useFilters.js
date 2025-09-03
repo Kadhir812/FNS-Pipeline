@@ -69,7 +69,8 @@ export const useFilters = () => {
     if (filters.search?.trim()) apiFilters.q = filters.search.trim();
     if (filters.source !== 'all') apiFilters.source = filters.source;
     if (filters.category !== 'all') apiFilters.category = filters.category;
-    if (filters.sentiment !== 'all') apiFilters.sentiment = filters.sentiment;
+    // Use impact_assessment instead of sentiment for API filter
+    if (filters.sentiment !== 'all') apiFilters.impact_assessment = filters.sentiment;
     if (filters.riskLevel !== 'all') apiFilters.risk_level = filters.riskLevel;
     if (filters.dateRange?.start) apiFilters.start_date = filters.dateRange.start;
     if (filters.dateRange?.end) apiFilters.end_date = filters.dateRange.end;

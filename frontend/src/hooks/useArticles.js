@@ -22,6 +22,10 @@ export const useArticles = (initialFilters = {}) => {
       };
 
       console.log('🔍 Fetching articles with params:', searchParams);
+      // Debug: Log sentiment filter value
+      if (searchParams.sentiment) {
+        console.log('Sentiment filter value sent to API:', searchParams.sentiment);
+      }
 
       const response = await articleAPI.searchArticles(searchParams);
       

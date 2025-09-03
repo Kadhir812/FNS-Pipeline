@@ -10,6 +10,9 @@ const Sidebar = ({ filters, onFilterChange, availableFilters = {} }) => {
 
   const { sources = [], categories = [], tickers = [] } = availableFilters;
 
+  // Get unique impact_assessment values from articles for dynamic sentiment filter
+  const impactAssessments = Array.from(new Set((availableFilters.articles || []).map(a => a.impact_assessment).filter(Boolean)));
+
   console.log('📊 Available filters:', { sources: sources.length, categories: categories.length });
 
   return (
@@ -57,9 +60,9 @@ const Sidebar = ({ filters, onFilterChange, availableFilters = {} }) => {
             onChange={(e) => handleFilterChange('sentiment', e.target.value)}
           >
             <option value="all">All Sentiment</option>
-            <option value="positive">Positive</option>
-            <option value="neutral">Neutral</option>
-            <option value="negative">Negative</option>
+            {impactAssessments.map(val => (
+              <option key={val} value={val}>{val}</option>
+            ))}
           </select>
         </div>
 
