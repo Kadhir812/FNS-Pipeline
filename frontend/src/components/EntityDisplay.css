@@ -1,0 +1,57 @@
+/* Entity row styling */
+.entity-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  background-color: var(--bg-tertiary);
+  border-radius: 6px;
+  border-left: 3px solid var(--primary-500);
+}
+
+.stock-symbol {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background-color: var(--primary-100, #e0eaff);
+  border-radius: 4px;
+  color: var(--primary-700, #2563eb);
+  font-weight: 500;
+}
+
+.entity-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+}
+
+/* Category styling */
+.category-container {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background-color: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin: 0 auto;
+  width: fit-content;
+}
+
+/* Modal entity info */
+.modal-entity-info {
+  margin-bottom: 16px;
+}
+
+.entity-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-right: 16px;
+}

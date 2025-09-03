@@ -33,16 +33,47 @@ export const getRiskLevel = (riskScore) => {
 export const getImpactBadge = (impact) => {
   switch (impact?.toUpperCase()) {
     case 'POSITIVE':
-    case 'LOW':
-      return { color: '#10b981', text: impact };
+    case 'SLIGHTLY POSITIVE':
+    case 'BULLISH':
+      return { color: '#10b981', text: impact }; // green
+    
     case 'NEGATIVE':
-    case 'HIGH':
-      return { color: '#ef4444', text: impact };
-    case 'MEDIUM':
-      return { color: '#f59e0b', text: impact };
+    case 'SLIGHTLY NEGATIVE':
+    case 'BEARISH':
+      return { color: '#ef4444', text: impact }; // red
+    
+    case 'HIGH RISK':
+      return { color: '#dc2626', text: impact }; // dark red
+    
+    case 'MODERATE RISK':
+      return { color: '#f59e0b', text: impact }; // orange
+    
+    case 'SPECULATIVE':
+      return { color: '#8b5cf6', text: impact }; // purple
+    
+    case 'NEUTRAL':
+    case 'LOW_RISK':
     default:
-      return { color: '#6b7280', text: 'NEUTRAL' };
+      return { color: '#6b7280', text: impact || 'NEUTRAL' }; // gray
   }
+};
+
+// Map category codes to their full names
+export const getCategoryName = (categoryCode) => {
+  const categories = {
+    'A': 'Earnings',
+    'B': 'Analyst Ratings & Recommendations',
+    'C': 'Mergers, Acquisitions & Deals',
+    'D': 'Regulatory & Legal Developments',
+    'E': 'Economic Data & Federal Reserve',
+    'F': 'Corporate Actions & Leadership',
+    'G': 'Market Trends & Sector Analysis',
+    'H': 'IPO & New Listings',
+    'I': 'Product Launches & Innovation',
+    'J': 'General Business & Industry News'
+  };
+  
+  return categories[categoryCode] || 'General News';
 };
 
 // Legacy functions for backward compatibility (not needed with API)

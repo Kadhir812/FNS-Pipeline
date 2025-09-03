@@ -22,6 +22,20 @@ const Dashboard = () => {
   } = useArticles();
   const [selectedArticle, setSelectedArticle] = useState(null);
 
+  // Extract unique tickers from articles
+  const tickerSet = new Set();
+  const tickers = articles
+    .filter(a => a.symbol && a.entity_name)
+    .map(a => {
+      const key = `${a.symbol}|${a.entity_name}`;
+      if (!tickerSet.has(key)) {
+        tickerSet.add(key);
+        return { symbol: a.symbol, entity_name: a.entity_name };
+      }
+      return null;
+    })
+    .filter(Boolean);
+
   // Handle filter changes
   const handleFilterChange = (key, value) => {
     if (key === 'reset') {
@@ -71,6 +85,13 @@ const Dashboard = () => {
     loadPage(page);
   };
 
+  // Filter articles by selected ticker and category
+  const filteredArticles = articles.filter(article => {
+    const tickerMatch = !filters.ticker || filters.ticker === 'all' || article.symbol === filters.ticker;
+    const categoryMatch = !filters.category || filters.category === 'all' || article.category === filters.category;
+    return tickerMatch && categoryMatch;
+  });
+
   if (loading) {
     return <LoadingSpinner message="Loading financial intelligence..." />;
   }
@@ -95,7 +116,10 @@ const Dashboard = () => {
         <Sidebar 
           filters={filters} 
           onFilterChange={handleFilterChange}
-          availableFilters={availableFilters}
+          availableFilters={{
+            ...availableFilters,
+            tickers
+          }}
         />
         
         <main className="main-content">
@@ -105,13 +129,13 @@ const Dashboard = () => {
           />
           
           <div className="articles-grid">
-            {articles.length === 0 ? (
+            {filteredArticles.length === 0 ? (
               <div className="no-articles">
                 <h3>No articles found</h3>
                 <p>Try adjusting your filters or search criteria.</p>
               </div>
             ) : (
-              articles.map(article => (
+              filteredArticles.map(article => (
                 <ArticleCard
                   key={article._id || article.doc_id || article.id}
                   article={article}

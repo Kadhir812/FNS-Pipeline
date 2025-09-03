@@ -1,8 +1,9 @@
 import React from 'react';
-import { TrendingUp, TrendingDown, Minus, ExternalLink, Clock, Star } from 'lucide-react';
-import { formatTimeAgo, getImpactBadge, getRiskLevel } from '../utils/articleUtils';
+import { TrendingUp, TrendingDown, Minus, ExternalLink, Clock, Star, Tag, BarChart, Building } from 'lucide-react';
+import { formatTimeAgo, getImpactBadge, getRiskLevel, getCategoryName } from '../utils/articleUtils';
 import RiskGauge from './ui/RiskGauge';
 import SentimentBar from './ui/SentimentBar';
+import './ArticleCard.css';
 
 const ArticleCard = ({ article, onReadMore }) => {
   // Handle different possible field names and fallbacks
@@ -10,11 +11,12 @@ const ArticleCard = ({ article, onReadMore }) => {
   const summary = article.summary || article.description || article.content?.substring(0, 150) + '...' || 'No summary available';
   const source = article.source || 'Unknown Source';
   const publishedDate = article.published_date || article.publishedAt || article.timestamp || new Date().toISOString();
-  const sentiment = article.sentiment || 0;
-  const riskScore = article.risk_score || 0;
+  const sentiment = parseFloat(article.sentiment) || 0;
+  const riskScore = article.risk_raw || article.risk_score || 0;
   const confidence = article.confidence || 0.8; // Default confidence if not available
-  const category = article.category || 'GENERAL';
+  const category = article.category || 'J';
   const impact = article.impact_assessment || getRiskLevel(riskScore);
+  const categoryName = getCategoryName(category);
   
   const impactBadge = getImpactBadge(impact);
   
@@ -46,6 +48,22 @@ const ArticleCard = ({ article, onReadMore }) => {
 
       <p className="article-summary">{summary}</p>
 
+      {/* Stock Symbol and Entity Row */}
+      {article.symbol && (
+        <div className="entity-row">
+          <div className="stock-symbol">
+            <Tag size={14} />
+            <strong>{article.symbol}</strong>
+          </div>
+          {article.entity_name && (
+            <div className="entity-name">
+              <Building size={14} />
+              {article.entity_name}
+            </div>
+          )}
+        </div>
+      )}
+
       <div className="article-metrics">
         <div className="metric-row">
           <div className="impact-badge" style={{ backgroundColor: impactBadge.color }}>
@@ -71,12 +89,19 @@ const ArticleCard = ({ article, onReadMore }) => {
       </div>
 
       <div className="article-tags">
-        <span className="category-tag">{category}</span>
-        {article.key_phrases && article.key_phrases.split(',').slice(0, 3).map((phrase, idx) => (
-          <span key={idx} className="key-phrase">
-            {phrase.trim()}
+        <div className="category-container">
+          <BarChart size={12} />
+          <span className="category-tag" title={categoryName}>
+            {category} - {categoryName}
           </span>
-        ))}
+        </div>
+        <div className="key-phrases-container">
+          {article.key_phrases && article.key_phrases.split(',').slice(0, 3).map((phrase, idx) => (
+            <span key={idx} className="key-phrase">
+              {phrase.trim()}
+            </span>
+          ))}
+        </div>
       </div>
 
       <div className="article-actions">

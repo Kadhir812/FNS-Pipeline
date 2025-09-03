@@ -8,7 +8,7 @@ const Sidebar = ({ filters, onFilterChange, availableFilters = {} }) => {
     onFilterChange(key, value);
   };
 
-  const { sources = [], categories = [] } = availableFilters;
+  const { sources = [], categories = [], tickers = [] } = availableFilters;
 
   console.log('📊 Available filters:', { sources: sources.length, categories: categories.length });
 
@@ -99,6 +99,21 @@ const Sidebar = ({ filters, onFilterChange, availableFilters = {} }) => {
             <option value="low">Low Risk</option>
             <option value="medium">Medium Risk</option>
             <option value="high">High Risk</option>
+          </select>
+        </div>
+
+        <div className="filter-group">
+          <label>Tickers</label>
+          <select 
+            value={filters.ticker || 'all'}
+            onChange={(e) => handleFilterChange('ticker', e.target.value)}
+          >
+            <option value="all">All Tickers</option>
+            {tickers.map(tickerObj => (
+              <option key={tickerObj.symbol} value={tickerObj.symbol}>
+                {tickerObj.symbol} - {tickerObj.entity_name}
+              </option>
+            ))}
           </select>
         </div>
 

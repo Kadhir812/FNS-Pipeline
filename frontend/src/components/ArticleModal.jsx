@@ -1,5 +1,6 @@
 import React from 'react';
-import { formatTimeAgo } from '../utils/articleUtils';
+import { Tag, Building, BarChart } from 'lucide-react';
+import { formatTimeAgo, getCategoryName } from '../utils/articleUtils';
 
 const ArticleModal = ({ article, onClose }) => {
   if (!article) return null;
@@ -21,18 +22,39 @@ const ArticleModal = ({ article, onClose }) => {
             <span>{article.source}</span>
             <span>{formatTimeAgo(article.publishedAt)}</span>
           </div>
+          
+          {/* Stock and Entity Information */}
+          {article.symbol && (
+            <div className="modal-entity-info">
+              <div className="entity-row">
+                <div className="entity-item">
+                  <Tag size={16} />
+                  <strong>Symbol:</strong> {article.symbol}
+                </div>
+                {article.entity_name && (
+                  <div className="entity-item">
+                    <Building size={16} />
+                    <strong>Company:</strong> {article.entity_name}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
           <div className="modal-metrics">
             <div className="modal-metric">
               <strong>Impact:</strong> {article.impact_assessment}
             </div>
             <div className="modal-metric">
-              <strong>Risk Score:</strong> {(article.risk_score * 100).toFixed(0)}%
+              <strong>Risk Score:</strong> {((article.risk_raw || article.risk_score || 0) * 100).toFixed(0)}%
             </div>
             <div className="modal-metric">
-              <strong>Confidence:</strong> {(article.confidence * 100).toFixed(0)}%
+              <strong>Confidence:</strong> {((article.confidence || 0) * 100).toFixed(0)}%
             </div>
             <div className="modal-metric">
-              <strong>Sentiment:</strong> {(article.sentiment * 100).toFixed(0)}%
+              <strong>Sentiment:</strong> {(parseFloat(article.sentiment || 0) * 100).toFixed(0)}%
+            </div>
+            <div className="modal-metric">
+              <strong>Category:</strong> <BarChart size={14} style={{verticalAlign: 'middle'}} /> {article.category} - {getCategoryName(article.category)}
             </div>
           </div>
           <div className="modal-summary">

@@ -68,7 +68,7 @@ df_json = df_raw.selectExpr("CAST(value AS STRING) as json") \
     .select("data.*")
 
 # === Read risk keywords from file ===
-KEYWORDS_PATH = os.path.join(os.path.dirname(__file__), "risk_keywords.txt")
+KEYWORDS_PATH = os.path.join(os.path.dirname(__file__), "enhanced_risk_keywords.txt")
 try:
     with open(KEYWORDS_PATH, 'r') as f:
         keywords = [line.strip().lower() for line in f if line.strip()]

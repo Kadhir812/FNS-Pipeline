@@ -1,0 +1,157 @@
+# Financial Risk Keywords List
+# This list contains words associated with financial risk, market volatility, 
+# and negative financial events that can be used to enhance sentiment analysis
+# and risk assessment in financial news processing.
+
+# Market Volatility
+Volatility
+Turbulence
+Fluctuation
+Instability
+Gyration
+Swing
+Oscillation
+Erratic
+Whipsaw
+Choppy
+Unpredictable
+
+# Market Downturns
+Crash
+Collapse
+Meltdown
+Plunge
+Plummet
+Drawdown
+Dive
+Tumble
+Correction
+Nosedive
+Freefall
+Selloff
+Capitulation
+Rout
+Bloodbath
+
+# Financial Distress
+Bankruptcy
+Default
+Insolvency
+Restructuring
+Liquidation
+Writedown
+Impairment
+Bailout
+Delisting
+Chapter-11
+Foreclosure
+Distress
+Receivership
+
+# Corporate Issues
+Fraud
+Scandal
+Lawsuit
+Litigation
+Investigation
+Penalty
+Fine
+Sanction
+Violation
+Breach
+Misconduct
+Misreporting
+Restatement
+Accounting-irregularities
+
+# Market Risk Factors
+Leverage
+Margin-call
+Counterparty-risk
+Liquidity-crunch
+Black-swan
+Tail-risk
+Contagion
+Flash-crash
+Short-squeeze
+Systemic-risk
+Credit-crunch
+Bubble
+Overheated
+Correction
+
+# Economic Concerns
+Recession
+Depression
+Slowdown
+Contraction
+Inflation
+Stagflation
+Hyperinflation
+Deflation
+Unemployment
+Austerity
+Deficit
+Downgrade
+Devaluation
+Default
+
+# Regulatory & Policy Risks
+Regulation
+Restriction
+Intervention
+Ban
+Prohibition
+Antitrust
+Breakup
+Oversight
+Compliance
+Supervision
+Audit
+Investigation
+Subpoena
+
+# Geopolitical Risks
+War
+Conflict
+Tension
+Sanctions
+Embargo
+Tariff
+Trade-war
+Dispute
+Crisis
+Unrest
+Instability
+Revolution
+Coup
+Nationalism
+
+# Banking & Credit Issues
+NPL
+Non-performing-loan
+Credit-default
+Credit-downgrade
+Stress-test
+Funding-gap
+Capital-shortfall
+Liquidity-risk
+Reserve-requirement
+Haircut
+Bank-run
+Deposit-flight
+Credit-freeze
+
+# Market Sentiment
+Panic
+Fear
+Uncertainty
+Doubt
+Anxiety
+Pessimism
+Distrust
+Nervousness
+Jittery
+Caution
+Bearish
+Negative-outlook
