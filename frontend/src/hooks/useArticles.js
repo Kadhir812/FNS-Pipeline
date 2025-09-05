@@ -26,6 +26,10 @@ export const useArticles = (initialFilters = {}) => {
       if (searchParams.sentiment) {
         console.log('Sentiment filter value sent to API:', searchParams.sentiment);
       }
+      // Debug: Log date range sent to API
+      if (searchParams.start_date || searchParams.end_date) {
+        console.log('Date range sent to API:', searchParams.start_date, searchParams.end_date);
+      }
 
       const response = await articleAPI.searchArticles(searchParams);
       

@@ -43,6 +43,10 @@ const ArticleCard = ({ article, onReadMore }) => {
             <Clock size={12} />
             {formatTimeAgo(publishedDate)}
           </span>
+          {/* Show real published date */}
+          <span className="article-real-date">
+            {publishedDate ? new Date(publishedDate).toLocaleString() : ''}
+          </span>
         </div>
       </div>
 
