@@ -49,7 +49,15 @@ services:
     networks:
       - etl-net
 
-
+  redis:
+    image: redis:7.2.4
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - d:/bigdata/redis_data:/data
+    networks:
+      - etl-net
 
 # === Optional: You can add Airflow or Spark here later ===
 # airflow:

@@ -17,7 +17,7 @@ export const useFilters = () => {
     sources: [],
     categories: [],
     sentiments: ['positive', 'negative', 'neutral'],
-    riskLevels: ['low', 'medium', 'high']
+    riskLevels: ['low_risk', 'medium_risk', 'moderate_risk', 'high_risk']
   });
 
   // Fetch available filter options from API

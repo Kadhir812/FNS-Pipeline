@@ -1,3 +1,38 @@
+"""
+TRANSFORM.PY DOCUMENTATION
+==========================
+
+Purpose:
+--------
+This script processes financial news articles streamed from Kafka, enriches them with risk and sentiment analysis, and writes the results to Elasticsearch for search and analytics.
+
+Key Steps:
+----------
+1. Read news articles from Kafka stream.
+2. Normalize confidence scores (so weak confidence doesn't inflate results).
+3. Calculate risk level using keywords and context (e.g., M&A, commodity news).
+4. Map risk level to a numeric score for further calculations.
+5. Assess the impact of each article using sentiment and risk (impact assessment).
+6. Calculate a final score for each article, balancing sentiment and risk (confidence-weighted risk formula).
+7. Save enriched articles to Elasticsearch for easy search and analysis.
+
+How Risk & Sentiment Work:
+--------------------------
+- Risk is determined by matching keywords and context (e.g., "merger", "commodity").
+- Sentiment is taken from the model/API and can be overridden if the context is clear.
+- Impact assessment is a two-step process: first by sentiment, then risk can override if high.
+- Final score uses both sentiment and risk, weighted by confidence (so strong signals aren't unfairly penalized).
+
+Outputs:
+--------
+- Each processed article is saved to Elasticsearch with all enrichment fields: title, summary, sentiment, risk, impact assessment, final score, tickers, and more.
+
+Who Should Use This:
+--------------------
+- Anyone who wants to analyze financial news for risk, sentiment, and trading signals, even with no prior coding or data experience.
+- All steps are automated and require no manual intervention.
+
+"""
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, from_json, lower, when, to_timestamp, coalesce, lit, log
 from pyspark.sql.types import StructType, StringType, StructField, DoubleType
@@ -6,14 +41,14 @@ import re
 import os
 import shutil
 
-# Clear checkpoint directory to avoid any stale state
 CHECKPOINT_PATH = "D:/big data pipeline/T/checkpoint"
-if os.path.exists(CHECKPOINT_PATH):
-    try:
-        shutil.rmtree(CHECKPOINT_PATH)
-        print("Checkpoint directory cleared")
-    except Exception as e:
-        print(f"Could not clear checkpoint: {str(e)}")
+# NOTE: For production, do NOT clear checkpoint directory and use latest offsets
+# if os.path.exists(CHECKPOINT_PATH):
+#     try:
+#         shutil.rmtree(CHECKPOINT_PATH)
+#         print("Checkpoint directory cleared")
+#     except Exception as e:
+#         print(f"Could not clear checkpoint: {str(e)}")
 
 # === Spark Session ===
 JARS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "jars"))
@@ -54,7 +89,6 @@ schema = StructType([
     StructField("doc_id", StringType())
 ])
 
-# === Read Kafka Stream ===
 df_raw = spark.readStream \
     .format("kafka") \
     .option("kafka.bootstrap.servers", "localhost:29092") \
@@ -72,9 +106,9 @@ KEYWORDS_PATH = os.path.join(os.path.dirname(__file__), "enhanced_risk_keywords.
 try:
     with open(KEYWORDS_PATH, 'r') as f:
         keywords = [line.strip().lower() for line in f if line.strip()]
-except:
+except Exception:
     keywords = ["risk", "loss", "default", "bankruptcy", "crash"]
-    print(f"Warning: Could not load risk keywords, using default list")
+    print("Warning: Could not load risk keywords, using default list")
 
 # Build condition for any keyword match in content or title
 keyword_condition = None
@@ -85,11 +119,11 @@ for word in keywords:
 # === Map sentiment to impact assessment directly in SQL expressions ===
 def write_to_es(batch_df, batch_id):
     try:
-        if batch_df.count() == 0:
+        n = batch_df.count()
+        if n == 0:
             print("Batch is empty, skipping.")
             return
-
-        print(f"Processing batch {batch_id} with {batch_df.count()} records")
+        print(f"Processing batch {batch_id} with {n} records")
 
         # Fill in nulls to avoid errors
         batch_df = batch_df.fillna({
@@ -105,8 +139,7 @@ def write_to_es(batch_df, batch_id):
 
         # CHANGE 1: Improved confidence normalization using logarithmic scaling
         # This prevents saturation and maintains resolution across the confidence range
-        max_conf = 200  # Tunable parameter based on your data distribution
-        from pyspark.sql.functions import log
+        max_conf = 1000  # Tunable parameter based on your data distribution
 
         enriched_df = batch_df.withColumn(
             "conf_norm",
@@ -114,14 +147,32 @@ def write_to_es(batch_df, batch_id):
             .otherwise(log(1 + col("confidence")) / log(1 + lit(max_conf)))
         )
 
-        # CHANGE 2: Calculate risk level as a categorical first
+        # CHANGE 2: Context-aware risk level calculation
+        # Add M&A, strategic, and commodity context
+    # from pyspark.sql.functions import lower  # already imported above
+        ma_keywords = ["m&a", "merger", "acquisition", "deal", "strategic", "expansion", "growth"]
+        commodity_keywords = ["output", "capacity", "margin", "commodity", "smelter", "cut", "price", "supply", "demand"]
+        ma_condition = None
+        for word in ma_keywords:
+            cond = lower(col("title")).contains(word) | lower(col("content")).contains(word)
+            ma_condition = cond if ma_condition is None else (ma_condition | cond)
+        commodity_condition = None
+        for word in commodity_keywords:
+            cond = lower(col("title")).contains(word) | lower(col("content")).contains(word)
+            commodity_condition = cond if commodity_condition is None else (commodity_condition | cond)
         enriched_df = enriched_df.withColumn(
             "risk_level",
             when(
-                (col("sentiment").cast("float") < -0.2) | keyword_condition,
+                keyword_condition & (col("sentiment") < 0),
                 lit("high_risk")
             ).when(
-                col("sentiment").cast("float") < 0,
+                ma_condition & (col("sentiment") > 0.2),
+                lit("medium_risk")
+            ).when(
+                commodity_condition & (col("sentiment") < 0),
+                lit("high_risk")
+            ).when(
+                col("sentiment") < 0,
                 lit("moderate_risk")
             ).otherwise(lit("low_risk"))
         )
@@ -131,6 +182,7 @@ def write_to_es(batch_df, batch_id):
             "risk_base",
             when(col("risk_level") == "high_risk", 0.9)
             .when(col("risk_level") == "moderate_risk", 0.7)
+            .when(col("risk_level") == "medium_risk", 0.5)
             .otherwise(0.1)
         )
 
@@ -161,41 +213,25 @@ def write_to_es(batch_df, batch_id):
             ).cast("long") * 1000
         )
 
-        # CHANGE 6: Add a config flag to control prioritization
-        # Set to true if risk should override sentiment (even if bullish)
-        risk_priority = True  
-
-        # Refined impact assessment with five sentiment tiers plus risk overlay
-        if risk_priority:
-            # Risk takes priority - original ordering
-            enriched_df = enriched_df.withColumn(
-                "impact_assessment",
-                when(col("risk_raw") >= 0.8, "HIGH RISK")
-                .when(col("risk_raw") >= 0.5, "MODERATE RISK")
-                .when(col("confidence") < 20, "NEUTRAL")  # Was UNCERTAIN, now NEUTRAL
-                .when(col("sentiment") >= 0.7, "BULLISH")
-                .when((col("sentiment") >= 0.4) & (col("sentiment") < 0.7), "POSITIVE")
-                .when((col("sentiment") >= 0.1) & (col("sentiment") < 0.4), "SLIGHTLY POSITIVE")
-                .when((col("sentiment") <= -0.7), "BEARISH")
-                .when((col("sentiment") <= -0.4) & (col("sentiment") > -0.7), "NEGATIVE")
-                .when((col("sentiment") <= -0.1) & (col("sentiment") > -0.4), "SLIGHTLY NEGATIVE")
-                .otherwise("NEUTRAL")
-            )
-        else:
-            # Sentiment-first evaluation with risk as secondary factor
-            enriched_df = enriched_df.withColumn(
-                "impact_assessment",
-                when(col("confidence") < 20, "NEUTRAL")  # Was UNCERTAIN, now NEUTRAL
-                .when(col("sentiment") >= 0.7, "BULLISH")
-                .when((col("sentiment") >= 0.4) & (col("sentiment") < 0.7), "POSITIVE")
-                .when((col("sentiment") >= 0.1) & (col("sentiment") < 0.4), "SLIGHTLY POSITIVE")
-                .when(col("sentiment") <= -0.7, "BEARISH")
-                .when((col("sentiment") <= -0.4) & (col("sentiment") > -0.7), "NEGATIVE")
-                .when((col("sentiment") <= -0.1) & (col("sentiment") > -0.4), "SLIGHTLY NEGATIVE")
-                .when(col("risk_raw") >= 0.8, "HIGH RISK")
-                .when(col("risk_raw") >= 0.5, "MODERATE RISK")
-                .otherwise("NEUTRAL")
-            )
+        # Step 1: sentiment-only impact assessment
+        enriched_df = enriched_df.withColumn(
+            "impact_assessment",
+            when(col("confidence") < 20, "NEUTRAL")
+            .when(col("sentiment") >= 0.7, "BULLISH")
+            .when(col("sentiment") >= 0.4, "POSITIVE")
+            .when(col("sentiment") >= 0.1, "SLIGHTLY POSITIVE")
+            .when(col("sentiment") <= -0.7, "BEARISH")
+            .when(col("sentiment") <= -0.4, "NEGATIVE")
+            .when(col("sentiment") <= -0.1, "SLIGHTLY NEGATIVE")
+            .otherwise("NEUTRAL")
+        )
+        # Step 2: overlay risk
+        enriched_df = enriched_df.withColumn(
+            "impact_assessment",
+            when(col("risk_raw") >= 0.8, "HIGH RISK")
+            .when((col("risk_raw") >= 0.5) & (col("risk_raw") < 0.8), "MODERATE RISK")
+            .otherwise(col("impact_assessment"))
+        )
 
         # CHANGE 7: Updated impact_score mapping with more granular values
         enriched_df = enriched_df.withColumn(
@@ -212,11 +248,11 @@ def write_to_es(batch_df, batch_id):
             .otherwise(0.0)
         )
 
-        # CHANGE 8: Improved final_score formula - confidence affects sentiment, not risk
-        risk_weight = 2.0  # Tunable parameter
+        # CHANGE 8: Confidence-Weighted Risk Formula for final_score
+        # final_score = (impact_score * conf_norm) - (risk_raw * (1 - conf_norm))
         enriched_df = enriched_df.withColumn(
             "final_score",
-            (col("impact_score") * col("conf_norm")) - (col("risk_raw") * risk_weight)
+            (col("impact_score") * col("conf_norm")) - (col("risk_raw") * (1 - col("conf_norm")))
         )
 
         # CHANGE 9: Add sentiment_confidence_score for analysis
@@ -247,15 +283,13 @@ def write_to_es(batch_df, batch_id):
 
         # DEBUG: Print sample row for inspection
         try:
-            sample_row = final_df.limit(1)
-            sample_row_dict = sample_row.toPandas().to_dict('records')
-            if sample_row_dict:
+            sample = final_df.limit(1).collect()
+            if sample:
+                row = sample[0].asDict()
                 print("Sample row for debugging:")
-                for k, v in sample_row_dict[0].items():
-                    if isinstance(v, str) and len(v) > 50:
-                        print(f"  {k}: {v[:50]}...")
-                    else:
-                        print(f"  {k}: {v}")
+                for k, v in row.items():
+                    s = (v[:50] + "...") if isinstance(v, str) and len(v) > 50 else v
+                    print(f"  {k}: {s}")
         except Exception as e:
             print(f"Could not print sample data: {e}")
 
@@ -295,16 +329,13 @@ query = df_json.writeStream \
     .option("checkpointLocation", CHECKPOINT_PATH) \
     .start()
 
-# Create direct index with Python instead of using the Spark connector
 import requests
 import json
 try:
     # Check if index exists
     index_exists = requests.head("http://localhost:9200/news-analysis")
-    
     if index_exists.status_code == 404:
         print("Creating Elasticsearch index manually...")
-        # Create index with mappings
         index_mappings = {
             "mappings": {
                 "properties": {
@@ -334,7 +365,6 @@ try:
                 }
             }
         }
-        
         create_response = requests.put(
             "http://localhost:9200/news-analysis",
             data=json.dumps(index_mappings),
@@ -347,5 +377,11 @@ try:
 except Exception as e:
     print(f"Could not create Elasticsearch index: {e}")
 
+# === Start Stream ===
 print("Streaming query started, awaiting termination...")
+query = df_json.writeStream \
+    .outputMode("append") \
+    .foreachBatch(write_to_es) \
+    .option("checkpointLocation", CHECKPOINT_PATH) \
+    .start()
 query.awaitTermination()

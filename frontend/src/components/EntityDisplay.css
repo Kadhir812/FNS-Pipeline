@@ -34,13 +34,13 @@
 .category-container {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 6px;
   padding: 4px 8px;
   background-color: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 4px;
-  margin: 0 auto;
+  margin: 0;
   width: fit-content;
 }
 

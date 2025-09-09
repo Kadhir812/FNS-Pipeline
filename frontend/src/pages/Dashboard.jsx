@@ -36,6 +36,14 @@ const Dashboard = () => {
     })
     .filter(Boolean);
 
+  // Debug: Log ticker information
+  console.log('📊 Total articles:', articles.length);
+  console.log('📊 Articles with symbol:', articles.filter(a => a.symbol).length);
+  console.log('📊 Articles with entity_name:', articles.filter(a => a.entity_name).length);
+  console.log('📊 Articles with both symbol and entity_name:', articles.filter(a => a.symbol && a.entity_name).length);
+  console.log('📊 Sample articles with symbols:', articles.filter(a => a.symbol && a.entity_name).slice(0, 3).map(a => ({ symbol: a.symbol, entity_name: a.entity_name, title: a.title.substring(0, 50) + '...' })));
+  console.log('📊 Extracted tickers:', tickers);
+  
   // Debug: Log unique impact_assessment values
   console.log('Unique impact_assessment values:', Array.from(new Set(articles.map(a => a.impact_assessment))));
 
@@ -88,12 +96,13 @@ const Dashboard = () => {
     loadPage(page);
   };
 
-  // Filter articles by selected ticker, category, and sentiment (impact_assessment)
+  // Filter articles by selected ticker, category, sentiment, and risk level
   const filteredArticles = articles.filter(article => {
     const tickerMatch = !filters.ticker || filters.ticker === 'all' || article.symbol === filters.ticker;
     const categoryMatch = !filters.category || filters.category === 'all' || article.category === filters.category;
     const sentimentMatch = !filters.sentiment || filters.sentiment === 'all' || article.impact_assessment === filters.sentiment;
-    return tickerMatch && categoryMatch && sentimentMatch;
+    const riskLevelMatch = !filters.riskLevel || filters.riskLevel === 'all' || article.risk_level === filters.riskLevel;
+    return tickerMatch && categoryMatch && sentimentMatch && riskLevelMatch;
   });
 
   if (loading) {

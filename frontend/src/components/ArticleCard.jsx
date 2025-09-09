@@ -1,6 +1,6 @@
 import React from 'react';
 import { TrendingUp, TrendingDown, Minus, ExternalLink, Clock, Star, Tag, BarChart, Building } from 'lucide-react';
-import { formatTimeAgo, getImpactBadge, getRiskLevel, getCategoryName } from '../utils/articleUtils';
+import { formatTimeAgo, getImpactBadge, getRiskLevel, getRiskLevelDisplay, getRiskLevelColor, getCategoryName } from '../utils/articleUtils';
 import RiskGauge from './ui/RiskGauge';
 import SentimentBar from './ui/SentimentBar';
 import './ArticleCard.css';
@@ -16,6 +16,7 @@ const ArticleCard = ({ article, onReadMore }) => {
   const confidence = article.confidence || 0.8; // Default confidence if not available
   const category = article.category || 'J';
   const impact = article.impact_assessment || getRiskLevel(riskScore);
+  const riskLevel = article.risk_level || getRiskLevel(riskScore); // Use Transform.py risk level
   const categoryName = getCategoryName(category);
   
   const impactBadge = getImpactBadge(impact);
@@ -36,17 +37,25 @@ const ArticleCard = ({ article, onReadMore }) => {
   return (
     <article className="article-card">
       <div className="article-header">
-        <h2 className="article-title">{title}</h2>
-        <div className="article-meta">
-          <span className="article-source">{source}</span>
-          <span className="article-time">
-            <Clock size={12} />
-            {formatTimeAgo(publishedDate)}
-          </span>
-          {/* Show real published date */}
-          <span className="article-real-date">
-            {publishedDate ? new Date(publishedDate).toLocaleString() : ''}
-          </span>
+        <div className="article-header-content">
+          <h2 className="article-title">{title}</h2>
+          <div className="article-meta">
+            <span className="article-source">{source}</span>
+            <span className="article-time">
+              <Clock size={12} />
+              {formatTimeAgo(publishedDate)}
+            </span>
+            {/* Show real published date */}
+            <span className="article-real-date">
+              {publishedDate ? new Date(publishedDate).toLocaleString() : ''}
+            </span>
+          </div>
+        </div>
+        <div className="article-impact-corner">
+          <div className="impact-badge" style={{ backgroundColor: impactBadge.color }}>
+            {getImpactIcon(impact)}
+            {impact || 'NEUTRAL'}
+          </div>
         </div>
       </div>
 
@@ -54,13 +63,13 @@ const ArticleCard = ({ article, onReadMore }) => {
 
       {/* Stock Symbol and Entity Row */}
       {article.symbol && (
-        <div className="entity-row">
-          <div className="stock-symbol">
+        <div className="article-entity-row">
+          <div className="article-stock-symbol">
             <Tag size={14} />
             <strong>{article.symbol}</strong>
           </div>
           {article.entity_name && (
-            <div className="entity-name">
+            <div className="article-entity-name" title={article.entity_name}>
               <Building size={14} />
               {article.entity_name}
             </div>
@@ -70,9 +79,17 @@ const ArticleCard = ({ article, onReadMore }) => {
 
       <div className="article-metrics">
         <div className="metric-row">
-          <div className="impact-badge" style={{ backgroundColor: impactBadge.color }}>
-            {getImpactIcon(impact)}
-            {impact || 'NEUTRAL'}
+          <div className="risk-level-badge">
+            <span 
+              className={`risk-level ${riskLevel?.replace('_', '-')}`}
+              style={{ 
+                backgroundColor: `${getRiskLevelColor(riskLevel)}20`,
+                color: getRiskLevelColor(riskLevel),
+                borderColor: `${getRiskLevelColor(riskLevel)}40`
+              }}
+            >
+              {getRiskLevelDisplay(riskLevel)}
+            </span>
           </div>
           <div className="confidence-score">
             <Star size={12} />

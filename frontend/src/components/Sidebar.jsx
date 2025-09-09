@@ -99,9 +99,10 @@ const Sidebar = ({ filters, onFilterChange, availableFilters = {} }) => {
             onChange={(e) => handleFilterChange('riskLevel', e.target.value)}
           >
             <option value="all">All Risk Levels</option>
-            <option value="low">Low Risk</option>
-            <option value="medium">Medium Risk</option>
-            <option value="high">High Risk</option>
+            <option value="low_risk">Low Risk</option>
+            <option value="medium_risk">Medium Risk</option>
+            <option value="moderate_risk">Moderate Risk</option>
+            <option value="high_risk">High Risk</option>
           </select>
         </div>
 

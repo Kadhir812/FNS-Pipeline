@@ -25,9 +25,39 @@ export const getSentimentColor = (sentiment) => {
 };
 
 export const getRiskLevel = (riskScore) => {
-  if (riskScore < 0.33) return 'LOW';
-  if (riskScore < 0.67) return 'MEDIUM';
-  return 'HIGH';
+  if (riskScore < 0.33) return 'low_risk';
+  if (riskScore < 0.67) return 'medium_risk';
+  return 'high_risk';
+};
+
+export const getRiskLevelDisplay = (riskLevel) => {
+  switch (riskLevel) {
+    case 'high_risk':
+      return 'HIGH RISK';
+    case 'moderate_risk':
+      return 'MODERATE RISK';
+    case 'medium_risk':
+      return 'MEDIUM RISK';
+    case 'low_risk':
+      return 'LOW RISK';
+    default:
+      return 'LOW RISK';
+  }
+};
+
+export const getRiskLevelColor = (riskLevel) => {
+  switch (riskLevel) {
+    case 'high_risk':
+      return '#dc2626'; // red
+    case 'moderate_risk':
+      return '#f59e0b'; // orange
+    case 'medium_risk':
+      return '#0369a1'; // blue
+    case 'low_risk':
+      return '#16a34a'; // green
+    default:
+      return '#16a34a'; // green (default to low risk)
+  }
 };
 
 export const getImpactBadge = (impact) => {
@@ -43,16 +73,25 @@ export const getImpactBadge = (impact) => {
       return { color: '#ef4444', text: impact }; // red
     
     case 'HIGH RISK':
-      return { color: '#dc2626', text: impact }; // dark red
+    case 'HIGH_RISK':
+      return { color: '#dc2626', text: 'HIGH RISK' }; // dark red
     
     case 'MODERATE RISK':
-      return { color: '#f59e0b', text: impact }; // orange
+    case 'MODERATE_RISK':
+      return { color: '#f59e0b', text: 'MODERATE RISK' }; // orange
+    
+    case 'MEDIUM RISK':
+    case 'MEDIUM_RISK':
+      return { color: '#0369a1', text: 'MEDIUM RISK' }; // blue
+    
+    case 'LOW RISK':
+    case 'LOW_RISK':
+      return { color: '#16a34a', text: 'LOW RISK' }; // green
     
     case 'SPECULATIVE':
       return { color: '#8b5cf6', text: impact }; // purple
     
     case 'NEUTRAL':
-    case 'LOW_RISK':
     default:
       return { color: '#6b7280', text: impact || 'NEUTRAL' }; // gray
   }

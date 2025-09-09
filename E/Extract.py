@@ -1,3 +1,46 @@
+"""
+EXTRACT.PY DOCUMENTATION
+========================
+
+Purpose:
+--------
+This script fetches financial news articles from an API, enriches them with NLP (Natural Language Processing), deduplicates them, and sends them to a Kafka stream for further processing.
+
+Key Steps:
+----------
+1. Fetch news articles from MarketAux API.
+2. For each article:
+    - Clean the text (remove HTML tags).
+    - Classify the article category using a machine learning model (DistilBART) or fallback rules.
+    - Extract key phrases and generate a summary using AI (LangChain/Ollama).
+    - Aggregate all tickers/entities for identical articles (deduplication).
+    - Override sentiment if the summary/content is clearly positive or negative.
+3. Only one message per unique article is sent to Kafka, with all associated tickers included.
+4. Articles are saved to an archive file for record-keeping.
+
+How Deduplication Works:
+------------------------
+- Articles with identical content and title are grouped together.
+- All tickers/entities mentioned in these articles are collected into lists.
+- Only one record per unique article is sent downstream, with all tickers included.
+
+How Sentiment Override Works:
+-----------------------------
+- If the summary or content contains clear positive words (e.g., "beat", "surge"), the sentiment is set to positive.
+- If it contains clear negative words (e.g., "risk", "fall"), the sentiment is set to negative.
+- This helps correct misclassifications from the original API/model.
+
+Outputs:
+--------
+- Each processed article is saved to `news_archive.jsonl` and sent to the Kafka topic `Financenews-raw`.
+- Each record includes: title, description, content, summary, key phrases, sentiment, confidence, all tickers/entities, and more.
+
+Who Should Use This:
+--------------------
+- Anyone who wants to build a financial news pipeline, even with no prior coding or data experience.
+- All steps are automated and require no manual intervention.
+
+"""
 import requests
 from kafka import KafkaProducer
 import json
@@ -12,6 +55,7 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 import logging
 import sys
+import redis
 
 def safe_format(value, format_spec=".2f"):
     """Safely format a value that might be None"""
@@ -192,30 +236,38 @@ def classify_with_distilbart(text):
         
         # 10-category financial news classification
         categories = [
-            "earnings and quarterly results",           # A = EARNINGS
-            "analyst ratings and recommendations",      # B = ANALYST-RATINGS  
-            "mergers acquisitions and deals",          # C = M&A
-            "regulatory and legal developments",        # D = REGULATORY
-            "economic data and federal reserve",        # E = ECONOMIC-DATA
-            "corporate actions and leadership",         # F = CORPORATE-ACTIONS
-            "market trends and sector analysis",        # G = MARKET-TRENDS
-            "ipo and new listings",                    # H = IPO-LISTINGS
-            "product launches and innovation",          # I = PRODUCT-NEWS
-            "general business and industry news"        # J = GENERAL-BUSINESS
+            "earnings and quarterly results",
+            "analyst ratings and recommendations",
+            "mergers, acquisitions and deals",
+            "regulatory and legal developments",
+            "economic data and central banks",
+            "corporate actions and leadership",
+            "market trends and sector analysis",
+            "ipo and new listings",
+            "product launches and innovation",
+            "general business and industry news",
+            "commodities and energy",
+            "esg and sustainability",
+            "macro and geopolitics",
+            "technology trends and disruption"
         ]
         
         # Category mapping
         category_map = {
-            "earnings and quarterly results": "A",
-            "analyst ratings and recommendations": "B",
-            "mergers acquisitions and deals": "C",
-            "regulatory and legal developments": "D",
-            "economic data and federal reserve": "E",
-            "corporate actions and leadership": "F",
-            "market trends and sector analysis": "G",
-            "ipo and new listings": "H",
-            "product launches and innovation": "I",
-            "general business and industry news": "J"
+            "earnings and quarterly results": "A",         # Company financial results, EPS, revenue, profit
+            "analyst ratings and recommendations": "B",    # Analyst upgrades/downgrades, price targets
+            "mergers, acquisitions and deals": "C",        # M&A, buyouts, strategic deals
+            "regulatory and legal developments": "D",      # Laws, SEC, compliance, government actions
+            "economic data and central banks": "E",        # Macro data, Fed, interest rates, inflation
+            "corporate actions and leadership": "F",       # Management changes, board, insider trades
+            "market trends and sector analysis": "G",      # Sector performance, market sentiment, ETF flows
+            "ipo and new listings": "H",                   # IPOs, direct listings, SPACs
+            "product launches and innovation": "I",        # New products, R&D, patents, tech launches
+            "general business and industry news": "J",     # Misc business news, company updates
+            "commodities and energy": "K",                 # Oil, gas, metals, agriculture, energy markets
+            "esg and sustainability": "L",                 # ESG, sustainability, climate, governance
+            "macro and geopolitics": "M",                  # Geopolitical events, trade wars, global macro
+            "technology trends and disruption": "N"        # AI, digital transformation, tech disruption
         }
         
         # Classify with DistilBART
@@ -246,7 +298,31 @@ def classify_with_distilbart(text):
         print(f"   ❌ DistilBART error: {e}")
         return None
 
+redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
+category_letters = 'ABCDEFGHIJKLMN'
+keywords_dict = {}
+for cat in category_letters:
+    redis_key = f'category_keywords_{cat}'
+    keywords_dict[cat] = set(redis_client.smembers(redis_key))
+
+def keyword_based_category(text):
+    text_lower = text.lower()
+    for cat, keywords in keywords_dict.items():
+        if any(word in text_lower for word in keywords):
+            return cat
+    return "J"  # Default to general business if no match
+
 def enrich_news(payload, article_num, total_articles):
+    # Sentiment override logic for clear positive/negative summaries
+    summary = payload.get('summary', '').lower()
+    content = payload.get('content', '').lower()
+    # If summary/content contains clear positive/negative phrases, override sentiment
+    positive_keywords = ["beat", "surge", "growth", "bullish", "strong", "record", "positive", "rally", "gain"]
+    negative_keywords = ["risk", "fall", "drop", "loss", "bearish", "struggle", "decline", "negative", "warning"]
+    if any(word in summary or word in content for word in positive_keywords):
+        payload['sentiment'] = max(payload.get('sentiment', 0.0) or 0.0, 0.7)
+    elif any(word in summary or word in content for word in negative_keywords):
+        payload['sentiment'] = min(payload.get('sentiment', 0.0) or 0.0, -0.7)
     text = clean_text(payload.get('content', '') or payload.get('description', ''))
     
     if not text:
@@ -262,25 +338,28 @@ def enrich_news(payload, article_num, total_articles):
     # CATEGORY - ML-based classification with DistilBART
     print(f"   📂 Classifying news category...")
     distilbart_category = classify_with_distilbart(text)
-    if distilbart_category:
-        payload['category'] = distilbart_category
-        print(f"   ✅ Category: {payload['category']}")
+    distilbart_confidence = payload.get('confidence', 1.0) or 1.0
+
+    # Confidence-based fallback
+    if distilbart_category and distilbart_confidence >= 0.5:
+        # === RULES-BASED OVERRIDES FOR COMMON MISLABELS ===
+        if distilbart_category == "C" and re.search(r'\binsider trade\b', text.lower()):
+            payload['category'] = "F"
+            print(f"   🔄 Override: Insider trade → F (corporate actions)")
+        elif distilbart_category == "H" and not re.search(r'\bipo\b|\bnew listing\b|\bpublic offering\b', text.lower()):
+            payload['category'] = "J"
+            print(f"   🔄 Override: Non-IPO news → J (general business)")
+        elif distilbart_category in ["J", "H"] and re.search(r'\betf\b|\bperformance\b|\bsector\b|\btrend\b', text.lower()):
+            payload['category'] = "G"
+            print(f"   🔄 Override: ETF/stock performance → G (market trends)")
+        else:
+            payload['category'] = distilbart_category
+            print(f"   ✅ Category: {payload['category']}")
     else:
-        # Fallback to rule-based classification if DistilBART fails
+        # Layered fallback: use Redis keywords for all categories
         try:
-            # Simple rule-based classification for fallback
-            if re.search(r'\b(earnings|revenue|profit|quarterly)\b', text.lower()):
-                payload['category'] = "A"
-            elif re.search(r'\b(upgrade|downgrade|rating|analyst)\b', text.lower()):
-                payload['category'] = "B"
-            elif re.search(r'\b(merger|acquisition|deal)\b', text.lower()):
-                payload['category'] = "C"
-            elif re.search(r'\b(regulation|sec|compliance|policy)\b', text.lower()):
-                payload['category'] = "D"
-            else:
-                payload['category'] = "J"  # Default category
-            
-            print(f"   ✅ Category (fallback): {payload['category']}")
+            payload['category'] = keyword_based_category(text)
+            print(f"   ✅ Category (Redis keyword fallback): {payload['category']}")
         except Exception as e:
             print(f"   ❌ Category classification error: {e}")
             payload['category'] = "J"
@@ -457,7 +536,12 @@ except Exception as e:
     print(f"⚠️ LangChain initialization failed: {e}")
     print("⚠️ Falling back to direct Ollama calls")
 
-
+def keyword_based_category(text):
+    text_lower = text.lower()
+    for cat, keywords in keywords_dict.items():
+        if any(word in text_lower for word in keywords):
+            return cat
+    return "J"  # Default to general business if no match
 
 def main():
     archive_path = 'news_archive.jsonl'
@@ -479,119 +563,76 @@ def main():
             print(f"\n🚀 Starting new batch at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
             articles = fetch_news()
             print(f"📥 Fetched {len(articles)} articles from API")
-            
+
             existing_doc_ids = load_existing_doc_ids(archive_path)
             print(f"📚 Found {len(existing_doc_ids)} existing articles in archive")
-            
+
             new_articles = 0
             skipped_articles = 0
             total_start_time = time.time()
-            
+
+            # Deduplicate by doc_id and aggregate symbols/entities
+            dedup_map = {}
+            for i, article in enumerate(articles, 1):
+                publish_date = article.get('published_at')
+                if isinstance(publish_date, datetime):
+                    publish_date = publish_date.isoformat()
+
+                doc_id = get_doc_id(article)
+                if doc_id in existing_doc_ids:
+                    print(f"\n⏭️  Skipping duplicate {i}/{len(articles)}: {article.get('title', '')[:50]}...")
+                    skipped_articles += 1
+                    continue
+
+                # Aggregate all symbols/entities for this doc_id
+                entities = article.get('entities', [])
+                symbols = []
+                entity_names = []
+                sentiments = []
+                confidences = []
+                for entity in entities:
+                    symbols.append(entity.get('symbol'))
+                    entity_names.append(entity.get('name'))
+                    sentiments.append(entity.get('sentiment_score'))
+                    confidences.append(entity.get('match_score'))
+
+                # Use first entity for main fields, but keep all in lists
+                sentiment = sentiments[0] if sentiments else None
+                confidence = confidences[0] if confidences else None
+                symbol = symbols[0] if symbols else None
+                entity_name = entity_names[0] if entity_names else None
+
+                payload = {
+                    'doc_id': doc_id,
+                    'title': article.get('title', ''),
+                    'description': article.get('description', ''),
+                    'content': article.get('snippet', ''),
+                    'sentiment': sentiment,
+                    'confidence': confidence,
+                    'publishedAt': publish_date,
+                    'source': article.get('source', ''),
+                    'link': article.get('url', ''),
+                    'image_url': article.get('image_url', None),
+                    'symbols': symbols,
+                    'entity_names': entity_names,
+                }
+
+                # NLP enrichment with detailed debugging
+                payload = enrich_news(payload, i, len(articles))
+
+                # Sentiment override already handled in enrich_news
+
+                dedup_map[doc_id] = payload
+
+            # Write deduplicated articles to archive and Kafka
             with open(archive_path, 'a', encoding='utf-8') as f:
-                for i, article in enumerate(articles, 1):
-                    try:
-                        publish_date = article.get('published_at')
-                        if isinstance(publish_date, datetime):
-                            publish_date = publish_date.isoformat()
-
-                        # Extract entities from the API response
-                        entities = article.get('entities', [])
-                        sentiment = None
-                        confidence = None
-                        symbol = None
-                        entity_name = None
-                        
-                        # Based on the API response format, process entities
-                        if entities and isinstance(entities, list):
-                            entities_count = len(entities)
-                            
-                            # Get first entity data for primary fields
-                            if entities_count > 0:
-                                first_entity = entities[0]
-                                
-                                # MarketAux API uses 'sentiment_score' and 'match_score'
-                                sentiment = first_entity.get('sentiment_score')
-                                confidence = first_entity.get('match_score')
-                                symbol = first_entity.get('symbol')
-                                entity_name = first_entity.get('name')
-                                
-                                # Debug what we found with exact values
-                                print(f"   🔍 Primary entity: {symbol} - {entity_name}")
-                                print(f"   📊 Entity data: sentiment={safe_format(sentiment)}, confidence={safe_format(confidence)}")
-                            
-                            # Debug total entities info
-                            print(f"   📊 Including all {entities_count} entities in payload")
-
-                        doc_id = get_doc_id(article)
-                        if doc_id in existing_doc_ids:
-                            print(f"\n⏭️  Skipping duplicate {i}/{len(articles)}: {article.get('title', '')[:50]}...")
-                            skipped_articles += 1
-                            continue
-
-                        payload = {
-                            'doc_id': doc_id,
-                            'title': article.get('title', ''),
-                            'description': article.get('description', ''),
-                            'content': article.get('snippet', ''),
-                            'sentiment': sentiment,
-                            'confidence': confidence,
-                            'publishedAt': publish_date,
-                            'source': article.get('source', ''),
-                            'link': article.get('url', ''),
-                            'image_url': article.get('image_url', None),
-                            'symbol': symbol,
-                            'entity_name': entity_name,
-                            # 'entities': entities,  # Include all entities
-                        }
-
-                        # NLP enrichment with detailed debugging
-                        payload = enrich_news(payload, i, len(articles))
-
-                        # Final debug output before saving
-                        if symbol and entity_name:
-                            print(f"   ✅ Including entity data - Symbol: {symbol}, Name: {entity_name}")
-                        else:
-                            print(f"   ⚠️ No entity symbol/name found in article")
-                            
-                        # Save and send the primary message
-                        f.write(json.dumps(payload, ensure_ascii=False) + '\n')
-                        producer.send(TOPIC, value=payload)
-                        new_articles += 1
-                        sent_messages = 1
-                        
-                        # Send additional messages for each entity
-                        entities = article.get('entities', [])
-                        if entities and isinstance(entities, list):
-                            for entity_index, entity in enumerate(entities):
-                                # Skip the first entity since it's already in the main message
-                                if entity_index == 0:
-                                    continue
-                                    
-                                # Create a new payload for this entity
-                                entity_payload = payload.copy()
-                                
-                                # Update entity-specific fields
-                                entity_payload['sentiment'] = entity.get('sentiment_score')
-                                entity_payload['confidence'] = entity.get('match_score')
-                                entity_payload['symbol'] = entity.get('symbol')
-                                entity_payload['entity_name'] = entity.get('name')
-                                
-                                # Generate a unique doc_id for this entity
-                                entity_id_string = payload['doc_id'] + f"_entity_{entity_index}"
-                                entity_payload['doc_id'] = entity_id_string
-                                
-                                # Send to Kafka
-                                producer.send(TOPIC, value=entity_payload)
-                                sent_messages += 1
-                        
-                        print(f"   💾 Saved primary article to archive & sent {sent_messages} total messages to Kafka ({len(entities)} entities found, {sent_messages-1} additional entity messages)")
-                        
-                    except Exception as article_error:
-                        print(f"❌ Error processing article {i}: {article_error}")
-                        continue
+                for payload in dedup_map.values():
+                    f.write(json.dumps(payload, ensure_ascii=False) + '\n')
+                    producer.send(TOPIC, value=payload)
+                    new_articles += 1
 
             producer.flush()
-            
+
             total_time = time.time() - total_start_time
             total_minutes = total_time / 60  # Convert seconds to minutes
 

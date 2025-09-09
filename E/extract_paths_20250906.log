@@ -1,0 +1,116 @@
+2025-09-06 19:51:59,797 - INFO - Starting DistilBART classification...
+2025-09-06 19:53:13,955 - INFO - DistilBART classification SUCCESS - Category: B - Label: 'analyst ratings and recommendations' - Confidence: 0.199 - Time: 7.82s
+2025-09-06 19:53:14,165 - INFO - Article 1: Using LangChain path
+2025-09-06 19:53:49,389 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 19:54:32,811 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 19:54:52,115 - INFO - Article 1: LangChain SUCCESS - Time: 97.95s
+2025-09-06 19:54:52,117 - INFO - Starting DistilBART classification...
+2025-09-06 19:54:59,867 - INFO - DistilBART classification SUCCESS - Category: G - Label: 'market trends and sector analysis' - Confidence: 0.252 - Time: 7.29s
+2025-09-06 19:55:00,046 - INFO - Article 2: Using LangChain path
+2025-09-06 19:55:03,301 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 19:55:49,918 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 19:56:11,498 - INFO - Article 2: LangChain SUCCESS - Time: 71.45s
+2025-09-06 19:56:11,499 - INFO - Starting DistilBART classification...
+2025-09-06 19:56:14,702 - INFO - DistilBART classification SUCCESS - Category: B - Label: 'analyst ratings and recommendations' - Confidence: 0.562 - Time: 2.90s
+2025-09-06 19:56:14,879 - INFO - Article 3: Using LangChain path
+2025-09-06 19:56:18,101 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 19:56:55,988 - INFO - <BrokerConnection client_id=kafka-python-producer-1, node_id=1 host=localhost:29092 <connecting> [IPv6 ('::1', 29092, 0, 0)]>: connecting to localhost:29092 [('::1', 29092, 0, 0) IPv6]
+2025-09-06 19:56:55,990 - INFO - <BrokerConnection client_id=kafka-python-producer-1, node_id=1 host=localhost:29092 <connected> [IPv6 ('::1', 29092, 0, 0)]>: Connection complete.
+2025-09-06 19:56:55,991 - INFO - <BrokerConnection client_id=kafka-python-producer-1, node_id=bootstrap-0 host=localhost:29092 <connected> [IPv6 ('::1', 29092, 0, 0)]>: Closing connection. 
+2025-09-06 19:57:31,375 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 19:57:46,959 - INFO - Article 3: LangChain SUCCESS - Time: 92.08s
+2025-09-06 20:07:49,903 - INFO - Starting DistilBART classification...
+2025-09-06 20:07:52,593 - INFO - DistilBART classification SUCCESS - Category: F - Label: 'corporate actions and leadership' - Confidence: 0.197 - Time: 2.43s
+2025-09-06 20:07:52,707 - INFO - Article 1: Using LangChain path
+2025-09-06 20:08:16,248 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:08:52,653 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:09:03,494 - INFO - Article 1: LangChain SUCCESS - Time: 70.79s
+2025-09-06 20:09:03,496 - INFO - Starting DistilBART classification...
+2025-09-06 20:09:06,132 - INFO - DistilBART classification SUCCESS - Category: A - Label: 'earnings and quarterly results' - Confidence: 0.535 - Time: 2.32s
+2025-09-06 20:09:06,301 - INFO - Article 2: Using LangChain path
+2025-09-06 20:09:09,852 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:09:57,486 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:10:36,197 - INFO - Article 2: LangChain SUCCESS - Time: 89.89s
+2025-09-06 20:10:36,198 - INFO - Starting DistilBART classification...
+2025-09-06 20:10:39,017 - INFO - DistilBART classification SUCCESS - Category: F - Label: 'corporate actions and leadership' - Confidence: 0.194 - Time: 2.52s
+2025-09-06 20:10:39,303 - INFO - Article 3: Using LangChain path
+2025-09-06 20:10:42,461 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:11:23,393 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:11:43,028 - INFO - Article 3: LangChain SUCCESS - Time: 63.72s
+2025-09-06 20:21:45,553 - INFO - Starting DistilBART classification...
+2025-09-06 20:21:48,564 - INFO - DistilBART classification SUCCESS - Category: G - Label: 'market trends and sector analysis' - Confidence: 0.317 - Time: 2.78s
+2025-09-06 20:21:48,693 - INFO - Article 1: Using LangChain path
+2025-09-06 20:22:10,632 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:22:42,849 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:23:27,523 - INFO - Article 1: LangChain SUCCESS - Time: 98.83s
+2025-09-06 20:33:29,980 - INFO - Starting DistilBART classification...
+2025-09-06 20:33:32,866 - INFO - DistilBART classification SUCCESS - Category: D - Label: 'regulatory and legal developments' - Confidence: 0.789 - Time: 2.64s
+2025-09-06 20:33:32,976 - INFO - Article 2: Using LangChain path
+2025-09-06 20:33:45,819 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:34:16,608 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:35:13,390 - INFO - Article 2: LangChain SUCCESS - Time: 100.41s
+2025-09-06 20:45:15,582 - INFO - Starting DistilBART classification...
+2025-09-06 20:45:18,153 - INFO - DistilBART classification SUCCESS - Category: H - Label: 'ipo and new listings' - Confidence: 0.183 - Time: 2.35s
+2025-09-06 20:45:18,254 - INFO - Article 2: Using LangChain path
+2025-09-06 20:45:30,850 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:46:14,091 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:46:36,650 - INFO - Article 2: LangChain SUCCESS - Time: 78.40s
+2025-09-06 20:46:36,652 - INFO - Starting DistilBART classification...
+2025-09-06 20:46:40,066 - INFO - DistilBART classification SUCCESS - Category: H - Label: 'ipo and new listings' - Confidence: 0.206 - Time: 3.10s
+2025-09-06 20:46:40,229 - INFO - Article 3: Using LangChain path
+2025-09-06 20:46:43,654 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:47:19,778 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 20:48:09,490 - INFO - Article 3: LangChain SUCCESS - Time: 89.26s
+2025-09-06 21:08:13,534 - INFO - Starting DistilBART classification...
+2025-09-06 21:08:15,663 - INFO - DistilBART classification SUCCESS - Category: D - Label: 'regulatory and legal developments' - Confidence: 0.401 - Time: 1.86s
+2025-09-06 21:08:15,791 - INFO - Article 1: Using LangChain path
+2025-09-06 21:08:27,911 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:09:07,898 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:09:28,062 - INFO - Article 1: LangChain SUCCESS - Time: 72.27s
+2025-09-06 21:19:30,293 - INFO - Starting DistilBART classification...
+2025-09-06 21:19:32,934 - INFO - DistilBART classification SUCCESS - Category: J - Label: 'general business and industry news' - Confidence: 0.221 - Time: 2.34s
+2025-09-06 21:19:33,074 - INFO - Article 2: Using LangChain path
+2025-09-06 21:19:44,457 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:20:30,170 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:20:51,404 - INFO - Article 2: LangChain SUCCESS - Time: 78.33s
+2025-09-06 21:30:53,584 - INFO - Starting DistilBART classification...
+2025-09-06 21:30:56,120 - INFO - DistilBART classification SUCCESS - Category: G - Label: 'market trends and sector analysis' - Confidence: 0.256 - Time: 2.31s
+2025-09-06 21:30:56,220 - INFO - Article 1: Using LangChain path
+2025-09-06 21:31:07,998 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:31:37,456 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:31:57,843 - INFO - Article 1: LangChain SUCCESS - Time: 61.62s
+2025-09-06 21:31:57,845 - INFO - Starting DistilBART classification...
+2025-09-06 21:32:00,245 - INFO - DistilBART classification SUCCESS - Category: I - Label: 'product launches and innovation' - Confidence: 0.704 - Time: 2.08s
+2025-09-06 21:32:00,393 - INFO - Article 2: Using LangChain path
+2025-09-06 21:32:03,457 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:32:44,793 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:33:11,269 - INFO - Article 2: LangChain SUCCESS - Time: 70.87s
+2025-09-06 21:33:11,270 - INFO - Starting DistilBART classification...
+2025-09-06 21:33:13,831 - INFO - DistilBART classification SUCCESS - Category: C - Label: 'mergers acquisitions and deals' - Confidence: 0.311 - Time: 2.23s
+2025-09-06 21:33:14,021 - INFO - Article 3: Using LangChain path
+2025-09-06 21:33:16,993 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:34:50,072 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:35:08,471 - INFO - Article 3: LangChain SUCCESS - Time: 114.45s
+2025-09-06 21:45:10,529 - INFO - Starting DistilBART classification...
+2025-09-06 21:45:13,264 - INFO - DistilBART classification SUCCESS - Category: H - Label: 'ipo and new listings' - Confidence: 0.361 - Time: 2.50s
+2025-09-06 21:45:13,369 - INFO - Article 2: Using LangChain path
+2025-09-06 21:45:25,633 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:45:56,990 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 21:46:16,997 - INFO - Article 2: LangChain SUCCESS - Time: 63.63s
+2025-09-06 22:36:28,657 - INFO - Starting DistilBART classification...
+2025-09-06 22:36:32,561 - INFO - DistilBART classification SUCCESS - Category: H - Label: 'ipo and new listings' - Confidence: 0.829 - Time: 3.51s
+2025-09-06 22:36:32,681 - INFO - Article 1: Using LangChain path
+2025-09-06 22:36:46,816 - INFO - HTTP Request: POST http://localhost:11434/api/generate "HTTP/1.1 200 OK"
+2025-09-06 22:36:51,995 - ERROR - Article 1: LangChain FAILED - Error: peer closed connection without sending complete message body (incomplete chunked read)
+2025-09-06 22:36:51,998 - INFO - Using fallback path with direct Ollama calls
+2025-09-06 22:36:52,041 - INFO - Direct Ollama - Key phrases SUCCESS - Time: 0.04s
+2025-09-06 22:36:52,073 - INFO - Direct Ollama - Summary SUCCESS - Time: 0.03s
+2025-09-06 22:36:52,075 - INFO - Starting DistilBART classification...
+2025-09-06 22:36:53,614 - ERROR - <BrokerConnection client_id=kafka-python-producer-1, node_id=1 host=localhost:29092 <connected> [IPv6 ('::1', 29092, 0, 0)]>: Closing connection. KafkaConnectionError: Socket EVENT_READ without in-flight-requests
+2025-09-06 22:36:55,345 - INFO - DistilBART classification SUCCESS - Category: G - Label: 'market trends and sector analysis' - Confidence: 0.240 - Time: 2.88s
+2025-09-06 22:36:55,486 - INFO - Article 2: Using LangChain path
+2025-09-06 22:36:59,557 - ERROR - Article 2: LangChain FAILED - Error: [WinError 10061] No connection could be made because the target machine actively refused it
+2025-09-06 22:36:59,557 - INFO - Using fallback path with direct Ollama calls
+2025-09-06 22:37:03,644 - INFO - Direct Ollama - Key phrases SUCCESS - Time: 4.09s
+2025-09-06 22:37:07,753 - INFO - Direct Ollama - Summary SUCCESS - Time: 4.11s
+2025-09-06 22:37:07,772 - INFO - <BrokerConnection client_id=kafka-python-producer-1, node_id=1 host=localhost:29092 <connecting> [IPv4 ('127.0.0.1', 29092)]>: connecting to localhost:29092 [('127.0.0.1', 29092) IPv4]

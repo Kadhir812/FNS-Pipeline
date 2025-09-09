@@ -115,25 +115,13 @@ class ElasticsearchService {
         });
       }
 
-      // Risk level filter
+      // Risk level filter - Use the risk_level field from Transform.py
       if (risk_level) {
         console.log('Filtering by risk level:', risk_level);
-        let riskRange = {};
-        
-        // Update to match the ranges defined in your SENTIMENT_RANGES.md
-        if (risk_level === 'low') {
-          riskRange = { gte: 0, lt: 0.3 };  // Updated to 0.3
-        } else if (risk_level === 'medium') {
-          riskRange = { gte: 0.3, lt: 0.6 }; // 0.3 to 0.6
-        } else if (risk_level === 'high') {
-          riskRange = { gte: 0.6 }; // 0.6 and above
-        }
-        
-        if (Object.keys(riskRange).length > 0) {
-          filter.push({
-            range: { risk_score: riskRange }
-          });
-        }
+        // Filter by the actual risk_level field from Transform.py
+        filter.push({
+          term: { risk_level: risk_level }
+        });
       }
 
       // Date range filter
@@ -158,10 +146,27 @@ class ElasticsearchService {
         query: {
           bool: {
             must: must.length > 0 ? must : [{ match_all: {} }],
-            filter: filter
+            filter: filter,
+            should: [
+              // Boost articles with symbols
+              {
+                exists: {
+                  field: "symbol",
+                  boost: 2.0
+                }
+              },
+              // Boost articles with entity names
+              {
+                exists: {
+                  field: "entity_name",
+                  boost: 1.5
+                }
+              }
+            ]
           }
         },
         sort: [
+          { "_score": { order: "desc" } }, // Sort by relevance score first
           { publishedAt: { order: sort_order === 'asc' ? 'asc' : 'desc' } }
         ],
         from: (page - 1) * page_size,
