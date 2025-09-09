@@ -5,8 +5,11 @@ import SortControls from '../components/SortControls';
 import ArticleCard from '../components/ArticleCard';
 import ArticleModal from '../components/ArticleModal';
 import LoadingSpinner from '../components/ui/LoadingSpinner';
+import MarketSentimentChart from '../components/charts/MarketSentimentChart';
+import CategoryStackedChart from '../components/charts/CategoryStackedChart';
 import { useArticles } from '../hooks/useArticles';
 import { useFilters } from '../hooks/useFilters';
+import '../components/charts/Charts.css';
 
 const Dashboard = () => {
   const { filters, updateFilter, getAPIFilters, availableFilters } = useFilters();
@@ -141,6 +144,12 @@ const Dashboard = () => {
             sortBy={`${filters.sortBy}-${filters.sortOrder}`}
             onSortChange={handleSortChange}
           />
+          
+          {/* Analytics Charts Section */}
+          <div className="analytics-section">
+            <MarketSentimentChart articles={filteredArticles} />
+            <CategoryStackedChart articles={filteredArticles} />
+          </div>
           
           <div className="articles-grid">
             {filteredArticles.length === 0 ? (

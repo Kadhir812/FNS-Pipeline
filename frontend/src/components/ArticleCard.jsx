@@ -1,11 +1,14 @@
-import React from 'react';
-import { TrendingUp, TrendingDown, Minus, ExternalLink, Clock, Star, Tag, BarChart, Building } from 'lucide-react';
+import React, { useState } from 'react';
+import { TrendingUp, TrendingDown, Minus, ExternalLink, Clock, Star, Tag, BarChart, Building, BarChart3 } from 'lucide-react';
 import { formatTimeAgo, getImpactBadge, getRiskLevel, getRiskLevelDisplay, getRiskLevelColor, getCategoryName } from '../utils/articleUtils';
 import RiskGauge from './ui/RiskGauge';
 import SentimentBar from './ui/SentimentBar';
+import ArticleMiniChart from './charts/ArticleMiniChart';
 import './ArticleCard.css';
+import './charts/Charts.css';
 
 const ArticleCard = ({ article, onReadMore }) => {
+  const [showInsights, setShowInsights] = useState(false);
   // Handle different possible field names and fallbacks
   const title = article.title || article.headline || 'No Title';
   const summary = article.summary || article.description || article.content?.substring(0, 150) + '...' || 'No summary available';
@@ -109,6 +112,17 @@ const ArticleCard = ({ article, onReadMore }) => {
         </div>
       </div>
 
+      {/* Mini trend chart for article sentiment/score - Only show when insights is toggled */}
+      {showInsights && (
+        <div className="article-chart-section">
+          <ArticleMiniChart article={article} />
+          <div className="chart-info">
+            <span className="chart-label">Sentiment Trend</span>
+            <span className="final-score">Score: {(parseFloat(article.final_score) || 0).toFixed(2)}</span>
+          </div>
+        </div>
+      )}
+
       <div className="article-tags">
         <div className="category-container">
           <BarChart size={12} />
@@ -126,6 +140,14 @@ const ArticleCard = ({ article, onReadMore }) => {
       </div>
 
       <div className="article-actions">
+        <button 
+          className="insights-btn"
+          onClick={() => setShowInsights(!showInsights)}
+          title={showInsights ? "Hide Insights" : "Show Insights"}
+        >
+          <BarChart3 size={16} />
+          {showInsights ? "Hide Insights" : "Insights"}
+        </button>
         <button 
           className="read-more-btn"
           onClick={() => onReadMore(article)}
