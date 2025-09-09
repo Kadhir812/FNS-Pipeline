@@ -48,7 +48,7 @@ const ArticleModal = ({ article, onClose }) => {
               <strong>Risk Score:</strong> {((article.risk_raw || article.risk_score || 0) * 100).toFixed(0)}%
             </div>
             <div className="modal-metric">
-              <strong>Confidence:</strong> {((article.confidence || 0) * 100).toFixed(0)}%
+              <strong>Confidence:</strong> {((article.conf_norm || (article.confidence && article.confidence <= 1 ? article.confidence : (article.confidence / 100)) || 0) * 100).toFixed(0)}%
             </div>
             <div className="modal-metric">
               <strong>Sentiment:</strong> {(parseFloat(article.sentiment || 0) * 100).toFixed(0)}%

@@ -142,7 +142,7 @@ export const filterArticles = (articles, filters) => {
     if (filters.source !== 'all' && article.source !== filters.source) return false;
 
     // Confidence filter
-    const confidence = (article.confidence || 0.8) * 100;
+    const confidence = (article.conf_norm || (article.confidence && article.confidence <= 1 ? article.confidence : (article.confidence / 100)) || 0.8) * 100;
     if (confidence < filters.confidence[0] || confidence > filters.confidence[1]) return false;
 
     // Search filter
@@ -167,7 +167,11 @@ export const sortArticles = (articles, sortBy) => {
     case 'sentiment':
       return [...articles].sort((a, b) => (b.sentiment || 0) - (a.sentiment || 0));
     case 'confidence':
-      return [...articles].sort((a, b) => (b.confidence || 0.8) - (a.confidence || 0.8));
+      return [...articles].sort((a, b) => {
+        const confA = a.conf_norm || (a.confidence && a.confidence <= 1 ? a.confidence : (a.confidence / 100)) || 0.8;
+        const confB = b.conf_norm || (b.confidence && b.confidence <= 1 ? b.confidence : (b.confidence / 100)) || 0.8;
+        return confB - confA;
+      });
     default:
       return articles;
   }

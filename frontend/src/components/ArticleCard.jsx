@@ -13,7 +13,7 @@ const ArticleCard = ({ article, onReadMore }) => {
   const publishedDate = article.published_date || article.publishedAt || article.timestamp || new Date().toISOString();
   const sentiment = parseFloat(article.sentiment) || 0;
   const riskScore = article.risk_raw || article.risk_score || 0;
-  const confidence = article.confidence || 0.8; // Default confidence if not available
+  const confidence = article.conf_norm || (article.confidence && article.confidence <= 1 ? article.confidence : (article.confidence / 100)) || 0.8; // Use normalized confidence or convert raw to decimal
   const category = article.category || 'J';
   const impact = article.impact_assessment || getRiskLevel(riskScore);
   const riskLevel = article.risk_level || getRiskLevel(riskScore); // Use Transform.py risk level
