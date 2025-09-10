@@ -2,4 +2,5 @@ kafka
 requests
 transformers>=4.30.0
 torch>=1.9.0
+redis
 # Install torch with: pip install torch --index-url https://download.pytorch.org/whl/cpu

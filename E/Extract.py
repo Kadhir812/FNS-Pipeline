@@ -56,6 +56,10 @@ from langchain_core.output_parsers import StrOutputParser
 import logging
 import sys
 import redis
+from colorama import Fore, Back, Style, init
+
+# Initialize colorama for cross-platform colored output
+init(autoreset=True)
 
 def safe_format(value, format_spec=".2f"):
     """Safely format a value that might be None"""
@@ -80,16 +84,27 @@ producer = KafkaProducer(
     value_serializer=lambda v: json.dumps(v).encode('utf-8')
 )
 
-# Setup logging
+# Setup logging with enhanced format for tracking fallbacks
+# Create logs directory if it doesn't exist
+logs_dir = os.path.join(os.path.dirname(__file__), 'logs')
+os.makedirs(logs_dir, exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s',
     handlers=[
-        logging.FileHandler(f"extract_paths_{datetime.now().strftime('%Y%m%d')}.log"),
+        logging.FileHandler(os.path.join(logs_dir, f"extract_paths_{datetime.now().strftime('%Y%m%d')}.log")),
         logging.StreamHandler(sys.stdout)
     ]
 )
 logger = logging.getLogger("extract")
+
+# Add a separate logger for fallback tracking
+fallback_logger = logging.getLogger("fallback_tracker")
+fallback_handler = logging.FileHandler(os.path.join(logs_dir, f"fallback_usage_{datetime.now().strftime('%Y%m%d')}.log"))
+fallback_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+fallback_logger.addHandler(fallback_handler)
+fallback_logger.setLevel(logging.INFO)
 
 def clean_text(text):
     if text:
@@ -340,34 +355,44 @@ def enrich_news(payload, article_num, total_articles):
     distilbart_category = classify_with_distilbart(text)
     distilbart_confidence = payload.get('confidence', 1.0) or 1.0
 
-    # Confidence-based fallback
-    if distilbart_category and distilbart_confidence >= 0.5:
+    # Confidence-based fallback with enhanced logging
+    if distilbart_category and distilbart_confidence >= 0.3:
         # === RULES-BASED OVERRIDES FOR COMMON MISLABELS ===
         if distilbart_category == "C" and re.search(r'\binsider trade\b', text.lower()):
             payload['category'] = "F"
-            print(f"   🔄 Override: Insider trade → F (corporate actions)")
+            logger.info(f"Article {article_num}: RULE OVERRIDE - Insider trade → F (corporate actions)")
+            print(f"   {Fore.YELLOW}🔄 Override: Insider trade → F (corporate actions){Style.RESET_ALL}")
         elif distilbart_category == "H" and not re.search(r'\bipo\b|\bnew listing\b|\bpublic offering\b', text.lower()):
             payload['category'] = "J"
-            print(f"   🔄 Override: Non-IPO news → J (general business)")
+            logger.info(f"Article {article_num}: RULE OVERRIDE - Non-IPO news → J (general business)")
+            print(f"   {Fore.YELLOW}🔄 Override: Non-IPO news → J (general business){Style.RESET_ALL}")
         elif distilbart_category in ["J", "H"] and re.search(r'\betf\b|\bperformance\b|\bsector\b|\btrend\b', text.lower()):
             payload['category'] = "G"
-            print(f"   🔄 Override: ETF/stock performance → G (market trends)")
+            logger.info(f"Article {article_num}: RULE OVERRIDE - ETF/stock performance → G (market trends)")
+            print(f"   {Fore.YELLOW}🔄 Override: ETF/stock performance → G (market trends){Style.RESET_ALL}")
         else:
             payload['category'] = distilbart_category
-            print(f"   ✅ Category: {payload['category']}")
+            logger.info(f"Article {article_num}: DISTILBART SUCCESS - Category: {payload['category']}, Confidence: {distilbart_confidence:.3f}")
+            print(f"   {Fore.GREEN}✅ Category: {payload['category']} (DistilBART - {distilbart_confidence:.2f}){Style.RESET_ALL}")
     else:
         # Layered fallback: use Redis keywords for all categories
         try:
             payload['category'] = keyword_based_category(text)
-            print(f"   ✅ Category (Redis keyword fallback): {payload['category']}")
+            fallback_reason = "Low confidence" if distilbart_category else "DistilBART unavailable"
+            logger.warning(f"Article {article_num}: KEYWORD FALLBACK - Reason: {fallback_reason}, Category: {payload['category']}")
+            fallback_logger.warning(f"CLASSIFICATION_FALLBACK - Article: {article_num}, Reason: {fallback_reason}, Method: Redis_Keywords, Category: {payload['category']}")
+            print(f"   {Fore.CYAN}✅ Category: {payload['category']} (Keyword fallback - {fallback_reason}){Style.RESET_ALL}")
         except Exception as e:
-            print(f"   ❌ Category classification error: {e}")
+            logger.error(f"Article {article_num}: CLASSIFICATION FAILED - DistilBART and Keywords both failed: {str(e)}")
+            fallback_logger.error(f"CLASSIFICATION_FAILURE - Article: {article_num}, Error: {str(e)}, Method: Default_Assignment")
+            print(f"   {Fore.RED}❌ Category classification error: {e}{Style.RESET_ALL}")
+            print(f"   {Fore.MAGENTA}🔄 Using default category: J (general business){Style.RESET_ALL}")
             payload['category'] = "J"
 
     # Use LangChain for key phrases and summary (keep as is)
     if USE_LANGCHAIN:
         try:
-            print("   🔄 Processing with LangChain...")
+            print(f"   {Fore.BLUE}🔄 Processing with LangChain...{Style.RESET_ALL}")
             logger.info(f"Article {article_num}: Using LangChain path")
             
             # Process the text with our sequential chain
@@ -377,23 +402,26 @@ def enrich_news(payload, article_num, total_articles):
             
             # Extract results
             payload['key_phrases'] = clean_ollama_response(results.get('key_phrases', 'N/A'))
-            print(f"   ✅ Key phrases: {payload['key_phrases'][:50]}...")
+            print(f"   {Fore.GREEN}✅ Key phrases: {payload['key_phrases'][:50]}... (LangChain){Style.RESET_ALL}")
             
             payload['summary'] = clean_ollama_response(results.get('summary', 'Financial news update'))
-            print(f"   ✅ Summary: {payload['summary'][:60]}...")
+            print(f"   {Fore.GREEN}✅ Summary: {payload['summary'][:60]}... (LangChain){Style.RESET_ALL}")
             
             logger.info(f"Article {article_num}: LangChain SUCCESS - Time: {langchain_time:.2f}s")
             
         except Exception as e:
             logger.error(f"Article {article_num}: LangChain FAILED - Error: {str(e)}")
-            print(f"   ❌ LangChain processing error: {e}")
-            print("   🔄 Falling back to individual Ollama calls...")
+            fallback_logger.warning(f"PROCESSING_FALLBACK - Article: {article_num}, Reason: LangChain_Error, Method: Direct_Ollama, Error: {str(e)}")
+            print(f"   {Fore.RED}❌ LangChain processing error: {e}{Style.RESET_ALL}")
+            print(f"   {Fore.YELLOW}🔄 Falling back to individual Ollama calls...{Style.RESET_ALL}")
             # Fall back to the original processing method for key phrases and summary
-            fallback_to_individual_processing(payload, text)
+            fallback_to_individual_processing(payload, text, article_num)
     else:
         logger.info(f"Article {article_num}: Using direct Ollama path (LangChain not available)")
+        fallback_logger.info(f"PROCESSING_DIRECT - Article: {article_num}, Reason: LangChain_Unavailable, Method: Direct_Ollama")
+        print(f"   {Fore.CYAN}🔄 Using direct Ollama calls (LangChain unavailable){Style.RESET_ALL}")
         # Use the original individual processing methods for key phrases and summary
-        fallback_to_individual_processing(payload, text)
+        fallback_to_individual_processing(payload, text, article_num)
 
 
     
@@ -403,12 +431,12 @@ def enrich_news(payload, article_num, total_articles):
     
     return payload
 
-def fallback_to_individual_processing(payload, text):
+def fallback_to_individual_processing(payload, text, article_num):
     """Fallback to individual Ollama calls for key phrases and summary only"""
-    logger.info("Using fallback path with direct Ollama calls")
+    logger.warning(f"Article {article_num}: Using FALLBACK path with direct Ollama calls")
     
     # KEY PHRASES - Advanced NER with financial focus
-    print(f"   🔍 Extracting key phrases...")
+    print(f"   {Fore.CYAN}🔍 Extracting key phrases... (Direct Ollama){Style.RESET_ALL}")
     try:
         key_phrases_prompt = (
             "Extract financial entities: tickers, amounts, percentages, companies, dates, actions.\n"
@@ -418,15 +446,16 @@ def fallback_to_individual_processing(payload, text):
         )
         start_time = time.time()
         payload['key_phrases'] = ollama_query(key_phrases_prompt, text)
-        logger.info(f"Direct Ollama - Key phrases SUCCESS - Time: {time.time() - start_time:.2f}s")
-        print(f"   ✅ Key phrases: {payload['key_phrases'][:50]}...")
+        process_time = time.time() - start_time
+        logger.info(f"Article {article_num}: Direct Ollama - Key phrases SUCCESS - Time: {process_time:.2f}s")
+        print(f"   {Fore.CYAN}✅ Key phrases: {payload['key_phrases'][:50]}... (Direct Ollama - {process_time:.2f}s){Style.RESET_ALL}")
     except Exception as e:
-        logger.error(f"Direct Ollama - Key phrases FAILED: {str(e)}")
-        print(f"   ❌ Key phrases error: {e}")
+        logger.error(f"Article {article_num}: Direct Ollama - Key phrases FAILED: {str(e)}")
+        print(f"   {Fore.RED}❌ Key phrases error: {e}{Style.RESET_ALL}")
         payload['key_phrases'] = "N/A"
 
     # SUMMARY - Constraint-based generation
-    print(f"   📋 Generating summary...")
+    print(f"   {Fore.CYAN}📋 Generating summary... (Direct Ollama){Style.RESET_ALL}")
     try:
         summary_prompt = (
             "One sentence summary: Subject + Action + Impact (<15 words).\n"
@@ -435,11 +464,12 @@ def fallback_to_individual_processing(payload, text):
         )
         start_time = time.time()
         payload['summary'] = ollama_query(summary_prompt, text)
-        logger.info(f"Direct Ollama - Summary SUCCESS - Time: {time.time() - start_time:.2f}s")
-        print(f"   ✅ Summary: {payload['summary'][:60]}...")
+        process_time = time.time() - start_time
+        logger.info(f"Article {article_num}: Direct Ollama - Summary SUCCESS - Time: {process_time:.2f}s")
+        print(f"   {Fore.CYAN}✅ Summary: {payload['summary'][:60]}... (Direct Ollama - {process_time:.2f}s){Style.RESET_ALL}")
     except Exception as e:
-        logger.error(f"Direct Ollama - Summary FAILED: {str(e)}")
-        print(f"   ❌ Summary error: {e}")
+        logger.error(f"Article {article_num}: Direct Ollama - Summary FAILED: {str(e)}")
+        print(f"   {Fore.RED}❌ Summary error: {e}{Style.RESET_ALL}")
         payload['summary'] = "Financial news update"
 
     # Impact assessment will be calculated in the main function using MarketAux data
@@ -530,11 +560,11 @@ Summary:"""
 try:
     NEWS_PROCESSING_CHAIN = create_news_processing_chain()
     USE_LANGCHAIN = True
-    print("✅ LangChain processing chain initialized successfully")
+    print(f"{Fore.GREEN}✅ LangChain processing chain initialized successfully{Style.RESET_ALL}")
 except Exception as e:
     USE_LANGCHAIN = False
-    print(f"⚠️ LangChain initialization failed: {e}")
-    print("⚠️ Falling back to direct Ollama calls")
+    print(f"{Fore.YELLOW}⚠️ LangChain initialization failed: {e}{Style.RESET_ALL}")
+    print(f"{Fore.YELLOW}⚠️ Falling back to direct Ollama calls{Style.RESET_ALL}")
 
 def keyword_based_category(text):
     text_lower = text.lower()
@@ -546,16 +576,27 @@ def keyword_based_category(text):
 def main():
     archive_path = 'news_archive.jsonl'
     
-    # Indicate classification and processing methods
+    # Indicate classification and processing methods with colors
+    print(f"\n{Fore.MAGENTA}🤖 EXTRACT.PY INITIALIZATION{Style.RESET_ALL}")
+    print(f"{Fore.MAGENTA}{'='*50}{Style.RESET_ALL}")
+    
     if USE_DISTILBART:
-        print(f"🤖 Using DistilBART for news classification (path: {DISTILBART_PATH})")
+        print(f"{Fore.GREEN}🤖 ✅ DistilBART ENABLED for news classification{Style.RESET_ALL}")
+        print(f"   📁 Model path: {DISTILBART_PATH}")
+        logger.info("INITIALIZATION: DistilBART classification ENABLED")
     else:
-        print("📝 Using rule-based fallback for news classification (DistilBART not found)")
+        print(f"{Fore.YELLOW}📝 ⚠️  DistilBART NOT FOUND - Using keyword fallback only{Style.RESET_ALL}")
+        logger.warning("INITIALIZATION: DistilBART classification DISABLED - keyword fallback only")
         
     if USE_LANGCHAIN:
-        print("⚡ Using LangChain for sequential processing pipeline")
+        print(f"{Fore.GREEN}⚡ ✅ LangChain ENABLED for sequential processing pipeline{Style.RESET_ALL}")
+        logger.info("INITIALIZATION: LangChain processing pipeline ENABLED")
     else:
-        print("🔄 Using direct Ollama calls for processing")
+        print(f"{Fore.YELLOW}🔄 ⚠️  LangChain NOT AVAILABLE - Using direct Ollama calls{Style.RESET_ALL}")
+        logger.warning("INITIALIZATION: LangChain DISABLED - direct Ollama fallback")
+    
+    print(f"{Fore.BLUE}📊 Redis keywords loaded for {len(keywords_dict)} categories{Style.RESET_ALL}")
+    print(f"{Fore.MAGENTA}{'='*50}{Style.RESET_ALL}\n")
         
     # Rest of your main function remains the same...
     while True:
@@ -636,13 +677,25 @@ def main():
             total_time = time.time() - total_start_time
             total_minutes = total_time / 60  # Convert seconds to minutes
 
-            print(f"\n📊 BATCH SUMMARY:")
+            print(f"\n{Fore.MAGENTA}📊 BATCH SUMMARY:{Style.RESET_ALL}")
             print(f"   📥 Total articles fetched: {len(articles)}")
-            print(f"   ✅ New articles processed: {new_articles}")
-            print(f"   ⏭️  Duplicate articles skipped: {skipped_articles}")
+            print(f"   {Fore.GREEN}✅ New articles processed: {new_articles}{Style.RESET_ALL}")
+            print(f"   {Fore.YELLOW}⏭️  Duplicate articles skipped: {skipped_articles}{Style.RESET_ALL}")
             print(f"   ⏱️  Total batch time: {total_minutes:.2f} minutes ({total_time:.2f} seconds)")
             print(f"   ⚡ Average time per article: {(total_time/max(new_articles, 1))/60:.2f} minutes ({total_time/max(new_articles, 1):.2f} seconds)")
-            print(f"   💤 Sleeping for 10 minutes...")
+            
+            # Add method usage summary (can be enhanced further with counters)
+            if USE_DISTILBART:
+                print(f"   {Fore.GREEN}🤖 Classification: DistilBART + keyword fallback{Style.RESET_ALL}")
+            else:
+                print(f"   {Fore.CYAN}� Classification: Keyword-based only{Style.RESET_ALL}")
+                
+            if USE_LANGCHAIN:
+                print(f"   {Fore.GREEN}⚡ Processing: LangChain pipeline + Ollama fallback{Style.RESET_ALL}")
+            else:
+                print(f"   {Fore.CYAN}🔄 Processing: Direct Ollama calls only{Style.RESET_ALL}")
+            
+            print(f"   {Fore.BLUE}�💤 Sleeping for 10 minutes...{Style.RESET_ALL}")
             time.sleep(600)
 
         except Exception as e:
