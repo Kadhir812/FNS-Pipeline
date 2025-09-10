@@ -142,6 +142,36 @@ class ElasticsearchService {
         filter.push(dateFilter);
       }
 
+      // Build dynamic sort array based on sort_by parameter
+      const sortArray = [];
+      
+      // Map sort_by to Elasticsearch field names
+      const sortFieldMap = {
+        'date': 'publishedAt',
+        'publishedAt': 'publishedAt',
+        'published_date': 'publishedAt',
+        'relevance': '_score',
+        'sentiment': 'sentiment',
+        'risk': 'risk_score',
+        'risk_score': 'risk_score',
+        'confidence': 'confidence'
+      };
+      
+      const elasticField = sortFieldMap[sort_by] || 'publishedAt';
+      
+      if (elasticField === '_score') {
+        // For relevance sorting, score comes first
+        sortArray.push({ "_score": { order: sort_order === 'asc' ? 'asc' : 'desc' } });
+        sortArray.push({ "publishedAt": { order: "desc" } }); // Secondary sort by date
+      } else {
+        // For other fields, sort by the field first, then by relevance
+        sortArray.push({ [elasticField]: { order: sort_order === 'asc' ? 'asc' : 'desc' } });
+        if (elasticField !== 'publishedAt') {
+          sortArray.push({ "publishedAt": { order: "desc" } }); // Secondary sort by date for non-date fields
+        }
+        sortArray.push({ "_score": { order: "desc" } }); // Tertiary sort by relevance
+      }
+
       const searchBody = {
         query: {
           bool: {
@@ -165,10 +195,7 @@ class ElasticsearchService {
             ]
           }
         },
-        sort: [
-          { "_score": { order: "desc" } }, // Sort by relevance score first
-          { publishedAt: { order: sort_order === 'asc' ? 'asc' : 'desc' } }
-        ],
+        sort: sortArray,
         from: (page - 1) * page_size,
         size: Math.min(page_size, 100), // Limit max page size
         highlight: {
@@ -183,6 +210,7 @@ class ElasticsearchService {
       };
 
       console.log('Elasticsearch query:', JSON.stringify(searchBody, null, 2));
+      console.log('🔄 Sort configuration:', { sort_by, sort_order, elasticField, sortArray });
 
       const response = await client.search({
         index: INDEX_NAME,

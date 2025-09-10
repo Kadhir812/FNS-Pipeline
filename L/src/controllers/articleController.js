@@ -29,8 +29,12 @@ class ArticleController {
         sort_by: req.query.sortBy === 'newest' ? 'date' : 
                  req.query.sortBy === 'oldest' ? 'date' :
                  req.query.sortBy === 'relevant' ? 'relevance' :
-                 req.query.sortBy || 'date',
-        sort_order: req.query.sortBy === 'oldest' ? 'asc' : 'desc',
+                 req.query.sortBy === 'risk' ? 'risk_score' :
+                 req.query.sortBy === 'sentiment' ? 'sentiment' :
+                 req.query.sortBy === 'confidence' ? 'confidence' :
+                 req.query.sort_by || 'publishedAt',
+        sort_order: req.query.sortBy === 'oldest' ? 'asc' : 
+                   req.query.sort_order || 'desc',
         page: parseInt(req.query.page) || 1,
         page_size: parseInt(req.query.limit) || 20
       };

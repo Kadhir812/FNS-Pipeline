@@ -4,9 +4,39 @@
 		{
 			"label": "Start SignalEdge Frontend",
 			"type": "shell",
-			"command": "cd frontend && npm run dev",
+			"command": "cd frontend; npm run dev",
 			"group": "build",
 			"isBackground": true,
+			"problemMatcher": [],
+			"options": {
+				"shell": {
+					"executable": "powershell.exe",
+					"args": ["-Command"]
+				}
+			}
+		},
+		{
+			"label": "Start Backend Server",
+			"type": "shell",
+			"command": "cd L; node server.js",
+			"group": "build",
+			"isBackground": true,
+			"problemMatcher": [],
+			"options": {
+				"shell": {
+					"executable": "powershell.exe",
+					"args": ["-Command"]
+				}
+			}
+		},
+		{
+			"label": "Start Full Stack",
+			"dependsOrder": "parallel",
+			"dependsOn": [
+				"Start Backend Server",
+				"Start SignalEdge Frontend"
+			],
+			"group": "build",
 			"problemMatcher": []
 		}
 	]

@@ -50,6 +50,16 @@ const Dashboard = () => {
   // Debug: Log unique impact_assessment values
   console.log('Unique impact_assessment values:', Array.from(new Set(articles.map(a => a.impact_assessment))));
 
+  // Helper function to get current sort value for display
+  const getCurrentSortValue = (sortBy, sortOrder) => {
+    if (sortBy === 'date' && sortOrder === 'desc') return 'newest';
+    if (sortBy === 'date' && sortOrder === 'asc') return 'oldest';
+    if (sortBy === 'risk') return 'risk';
+    if (sortBy === 'sentiment') return 'sentiment';
+    if (sortBy === 'confidence') return 'confidence';
+    return 'newest'; // default
+  };
+
   // Handle filter changes
   const handleFilterChange = (key, value) => {
     if (key === 'reset') {
@@ -71,9 +81,36 @@ const Dashboard = () => {
 
   // Handle sort changes
   const handleSortChange = (sortValue) => {
-    const [sortBy, sortOrder] = sortValue.split('-');
-    updateFilter('sortBy', sortBy);
-    updateFilter('sortOrder', sortOrder || 'desc');
+    console.log('🔄 Sort change requested:', sortValue);
+    
+    // Map frontend sort values to backend API format
+    switch (sortValue) {
+      case 'newest':
+        updateFilter('sortBy', 'date');
+        updateFilter('sortOrder', 'desc');
+        break;
+      case 'oldest':
+        updateFilter('sortBy', 'date');
+        updateFilter('sortOrder', 'asc');
+        break;
+      case 'risk':
+        updateFilter('sortBy', 'risk');
+        updateFilter('sortOrder', 'desc');
+        break;
+      case 'sentiment':
+        updateFilter('sortBy', 'sentiment');
+        updateFilter('sortOrder', 'desc');
+        break;
+      case 'confidence':
+        updateFilter('sortBy', 'confidence');
+        updateFilter('sortOrder', 'desc');
+        break;
+      default:
+        // Handle hyphenated values (sortBy-sortOrder format)
+        const [sortBy, sortOrder] = sortValue.split('-');
+        updateFilter('sortBy', sortBy);
+        updateFilter('sortOrder', sortOrder || 'desc');
+    }
   };
 
   // Search articles when filters change - but debounce it
@@ -141,7 +178,7 @@ const Dashboard = () => {
         
         <main className="main-content">
           <SortControls 
-            sortBy={`${filters.sortBy}-${filters.sortOrder}`}
+            sortBy={getCurrentSortValue(filters.sortBy, filters.sortOrder)}
             onSortChange={handleSortChange}
           />
           
