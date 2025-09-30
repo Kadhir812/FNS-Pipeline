@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { TrendingUp, TrendingDown, Minus, ExternalLink, Clock, Star, Tag, BarChart, Building, BarChart3 } from 'lucide-react';
 import { formatTimeAgo, getImpactBadge, getRiskLevel, getRiskLevelDisplay, getRiskLevelColor, getCategoryName } from '../utils/articleUtils';
 import RiskGauge from './ui/RiskGauge';
@@ -37,6 +37,10 @@ const ArticleCard = ({ article, onReadMore }) => {
     }
   };
 
+  // Use direct field access for symbol and entity name
+  const displaySymbol = article.symbol || null;
+  const displayEntity = article.entity_name || null;
+
   return (
     <article className="article-card">
       <div className="article-header">
@@ -64,21 +68,7 @@ const ArticleCard = ({ article, onReadMore }) => {
 
       <p className="article-summary">{summary}</p>
 
-      {/* Stock Symbol and Entity Row */}
-      {article.symbol && (
-        <div className="article-entity-row">
-          <div className="article-stock-symbol">
-            <Tag size={14} />
-            <strong>{article.symbol}</strong>
-          </div>
-          {article.entity_name && (
-            <div className="article-entity-name" title={article.entity_name}>
-              <Building size={14} />
-              {article.entity_name}
-            </div>
-          )}
-        </div>
-      )}
+
 
       <div className="article-metrics">
         <div className="metric-row">
@@ -138,6 +128,37 @@ const ArticleCard = ({ article, onReadMore }) => {
           ))}
         </div>
       </div>
+
+      {/* Professional Symbol & Company Display */}
+      {(displaySymbol || displayEntity) && (
+        <div className="ticker-info-corner">
+          <div className="ticker-badge-container">
+            {displaySymbol && (
+              <div className="ticker-symbol-badge">
+                <div className="ticker-icon">
+                  <Tag size={14} />
+                </div>
+                <div className="ticker-content">
+                  <span className="ticker-label">Ticker</span>
+                  <span className="ticker-value">{displaySymbol}</span>
+                </div>
+              </div>
+            )}
+            {displayEntity && (
+              <div className="company-name-badge">
+                <div className="company-icon">
+                  <Building size={14} />
+                </div>
+                <div className="company-content">
+                  <span className="company-label">Company</span>
+                  <span className="company-value">{displayEntity}</span>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
 
       <div className="article-actions">
         <button 

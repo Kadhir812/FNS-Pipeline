@@ -309,3 +309,191 @@
     justify-content: center;
   }
 }
+
+/* ---------------- Ticker Info (Symbol + Company) ---------------- */
+/* Ensure each article card can position ticker absolutely */
+.article-card {
+  position: relative;
+  padding-bottom: 4.25rem; /* reserve space so overlay doesn't cover buttons */
+}
+
+/* Professional Symbol & Company Display */
+.ticker-info-corner {
+  position: absolute;
+  right: 0.85rem;
+  bottom: 0.85rem;
+  z-index: 5;
+  min-width: 200px;
+}
+
+.ticker-badge-container {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Symbol Badge */
+.ticker-symbol-badge {
+  display: flex;
+  align-items: center;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 8px;
+  padding: 8px 12px;
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: all 0.3s ease;
+  cursor: default;
+}
+
+.ticker-symbol-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(102, 126, 234, 0.4);
+}
+
+.ticker-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  margin-right: 8px;
+  color: white;
+}
+
+.ticker-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.ticker-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.8);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.ticker-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: white;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+}
+
+/* Company Badge */
+.company-name-badge {
+  display: flex;
+  align-items: center;
+  background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%);
+  border-radius: 8px;
+  padding: 8px 12px;
+  box-shadow: 0 4px 12px rgba(17, 153, 142, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  transition: all 0.3s ease;
+  cursor: default;
+}
+
+.company-name-badge:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(17, 153, 142, 0.4);
+}
+
+.company-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+  margin-right: 8px;
+  color: white;
+}
+
+.company-content {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  max-width: 150px;
+}
+
+.company-label {
+  font-size: 10px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.8);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.company-value {
+  font-size: 12px;
+  font-weight: 600;
+  color: white;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Dark mode adjustments */
+[data-theme="dark"] .ticker-symbol-badge {
+  background: linear-gradient(135deg, #4c63d2 0%, #5a4fcf 100%);
+  box-shadow: 0 4px 12px rgba(76, 99, 210, 0.4);
+}
+
+[data-theme="dark"] .ticker-symbol-badge:hover {
+  box-shadow: 0 6px 16px rgba(76, 99, 210, 0.5);
+}
+
+[data-theme="dark"] .company-name-badge {
+  background: linear-gradient(135deg, #0d7377 0%, #2eb398 100%);
+  box-shadow: 0 4px 12px rgba(13, 115, 119, 0.4);
+}
+
+[data-theme="dark"] .company-name-badge:hover {
+  box-shadow: 0 6px 16px rgba(13, 115, 119, 0.5);
+}
+
+/* Responsive Design */
+@media (max-width: 640px) {
+  .article-card {
+    padding-bottom: 5.5rem; /* more space for mobile */
+  }
+  
+  .ticker-info-corner {
+    right: 0.6rem;
+    bottom: 0.6rem;
+    min-width: 180px;
+  }
+  
+  .ticker-badge-container {
+    gap: 6px;
+  }
+  
+  .ticker-symbol-badge,
+  .company-name-badge {
+    padding: 6px 10px;
+  }
+  
+  .ticker-icon,
+  .company-icon {
+    width: 20px;
+    height: 20px;
+  }
+  
+  .ticker-value {
+    font-size: 13px;
+  }
+  
+  .company-value {
+    font-size: 11px;
+  }
+  
+  .company-content {
+    max-width: 120px;
+  }
+}
