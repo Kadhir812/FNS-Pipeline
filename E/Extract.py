@@ -72,7 +72,7 @@ def safe_format(value, format_spec=".2f"):
 
 KAFKA_BROKER = 'localhost:29092'
 TOPIC = 'Financenews-raw'
-MARKETAUX_API_KEY=  'qyntLjkPLqpWNaiP64UufWDwnWdQsp1aLNh9p3sw' # <-- Add your API key here
+MARKETAUX_API_KEY=  'f8mjfUFx1U4xLfJkSxHgJ8wxl6d1pBAMURmyi21N' # <-- Add your API key here
 
 # Path to DistilBART model
 DISTILBART_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "T", "models", "distilbart-mnli")
@@ -803,8 +803,6 @@ def main():
                 # Use first entity for main fields, but keep all in lists
                 sentiment = sentiments[0] if sentiments else None
                 confidence = confidences[0] if confidences else None
-                symbol = symbols[0] if symbols else None
-                entity_name = entity_names[0] if entity_names else None
 
                 payload = {
                     'doc_id': doc_id,
