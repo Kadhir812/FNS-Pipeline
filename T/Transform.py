@@ -34,7 +34,7 @@ Who Should Use This:
 
 """
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, lower, when, to_timestamp, coalesce, lit, log
+from pyspark.sql.functions import col, from_json, lower, when, to_timestamp, coalesce, lit, log, size
 from pyspark.sql.types import StructType, StringType, StructField, DoubleType
 from pyspark.sql.functions import sha2, concat_ws
 import re
@@ -69,6 +69,7 @@ spark = SparkSession.builder \
     .getOrCreate()
 
 # === Schema ===
+from pyspark.sql.types import ArrayType
 schema = StructType([
     StructField("title", StringType()),
     StructField("description", StringType()),
@@ -84,8 +85,8 @@ schema = StructType([
     StructField("category", StringType()),
     StructField("summary", StringType()),
     StructField("impact_assessment", StringType()),
-    StructField("symbol", StringType()),
-    StructField("entity_name", StringType()),
+    StructField("symbols", ArrayType(StringType())),
+    StructField("entity_names", ArrayType(StringType())),
     StructField("doc_id", StringType())
 ])
 
@@ -100,6 +101,18 @@ df_raw = spark.readStream \
 df_json = df_raw.selectExpr("CAST(value AS STRING) as json") \
     .withColumn("data", from_json(col("json"), schema)) \
     .select("data.*")
+
+# Create symbol and entity_name from first elements of arrays
+from pyspark.sql.functions import expr
+df_json = df_json.withColumn(
+    "symbol",
+    when((col("symbols").isNotNull()) & (size(col("symbols")) > 0), col("symbols")[0])
+    .otherwise(lit(None))
+).withColumn(
+    "entity_name",
+    when((col("entity_names").isNotNull()) & (size(col("entity_names")) > 0), col("entity_names")[0])
+    .otherwise(lit(None))
+)
 
 # === Read risk keywords from file ===
 KEYWORDS_PATH = os.path.join(os.path.dirname(__file__), "enhanced_risk_keywords.txt")
