@@ -142,6 +142,32 @@ class ArticleController {
       });
     }
   }
+
+  // Get time-series history for a symbol
+  async getHistory(req, res) {
+    try {
+      const symbol = (req.query.symbol || '').toString().trim();
+      const limit = parseInt(req.query.limit) || 200;
+      const from = req.query.from ? Number(req.query.from) : null;
+      const to = req.query.to ? Number(req.query.to) : null;
+
+      if (!symbol) {
+        return res.status(400).json({ success: false, message: 'Query parameter `symbol` is required' });
+      }
+
+      const rows = await elasticsearchService.getArticleHistory(symbol, limit, from, to);
+
+      res.json({
+        success: true,
+        data: rows,
+        meta: { symbol: symbol.toUpperCase(), count: rows.length },
+        timestamp: new Date().toISOString()
+      });
+    } catch (error) {
+      console.error('Get history error:', error);
+      res.status(500).json({ success: false, message: 'Internal server error', error: process.env.NODE_ENV === 'development' ? error.message : undefined });
+    }
+  }
 }
 
 export default new ArticleController();

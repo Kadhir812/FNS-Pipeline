@@ -105,6 +105,28 @@ export const validateSimilarArticles = [
     .withMessage('Limit must be an integer between 1 and 20')
 ];
 
+// Validation for history endpoint
+export const validateHistoryQuery = [
+  query('symbol')
+    .notEmpty()
+    .isString()
+    .trim()
+    .isLength({ min: 1, max: 20 })
+    .withMessage('Symbol query parameter is required and must be a short string'),
+  query('limit')
+    .optional()
+    .isInt({ min: 1, max: 10000 })
+    .withMessage('Limit must be an integer between 1 and 10000'),
+  query('from')
+    .optional()
+    .isInt()
+    .withMessage('From must be an epoch millisecond integer'),
+  query('to')
+    .optional()
+    .isInt()
+    .withMessage('To must be an epoch millisecond integer')
+];
+
 export default {
   validateSearchQuery,
   validateArticleId,

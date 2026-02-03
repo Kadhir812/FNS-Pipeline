@@ -146,7 +146,7 @@ def ollama_query(prompt, text):
             OLLAMA_URL,
             json={"model": OLLAMA_MODEL, "prompt": prompt.replace('+ text', text)},
             stream=True,
-            timeout=90
+            # timeout=False
         )
         
         if response.status_code != 200:
@@ -314,9 +314,14 @@ def classify_with_distilbart(text):
         return None
 
 redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
-category_letters = 'ABCDEFGHIJKLMN'
+
+# Category constants
+CATEGORY_LETTERS = 'ABCDEFGHIJKLMN'
+CATEGORY_LIST = list(CATEGORY_LETTERS)  # ['A', 'B', 'C', ..., 'N']
+
+# Load keywords from Redis once at module initialization
 keywords_dict = {}
-for cat in category_letters:
+for cat in CATEGORY_LETTERS:
     redis_key = f'category_keywords_{cat}'
     keywords_dict[cat] = set(redis_client.smembers(redis_key))
 
@@ -337,8 +342,8 @@ def calculate_keyword_scores(text):
     text_lower = text.lower()
     category_scores = {}
     
-    # Get all category keywords from Redis
-    for category in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N']:
+    # Score each category using pre-loaded keywords from Redis
+    for category in CATEGORY_LIST:
         try:
             keywords = keywords_dict.get(category, set())
             if keywords:
@@ -347,8 +352,8 @@ def calculate_keyword_scores(text):
                 match_weight = 0.0
                 
                 for keyword in keywords:
-                    keyword_str = keyword.decode('utf-8') if isinstance(keyword, bytes) else str(keyword)
-                    keyword_lower = keyword_str.lower()
+                    # Keywords are already strings due to decode_responses=True
+                    keyword_lower = keyword.lower()
                     
                     # Count occurrences with different weights
                     if keyword_lower in text_lower:
@@ -729,12 +734,6 @@ except Exception as e:
     print(f"{Fore.YELLOW}⚠️ LangChain initialization failed: {e}{Style.RESET_ALL}")
     print(f"{Fore.YELLOW}⚠️ Falling back to direct Ollama calls{Style.RESET_ALL}")
 
-def keyword_based_category(text):
-    text_lower = text.lower()
-    for cat, keywords in keywords_dict.items():
-        if any(word in text_lower for word in keywords):
-            return cat
-    return "J"  # Default to general business if no match
 
 def main():
     archive_path = 'news_archive.jsonl'

@@ -12,7 +12,7 @@ import { useFilters } from '../hooks/useFilters';
 import '../components/charts/Charts.css';
 
 const Dashboard = () => {
-  const { filters, updateFilter, getAPIFilters, availableFilters } = useFilters();
+  const { filters, updateFilter, getAPIFilters, availableFilters, resetFilters } = useFilters();
   const { 
     articles, 
     loading, 
@@ -64,15 +64,21 @@ const Dashboard = () => {
   const handleFilterChange = (key, value) => {
     if (key === 'reset') {
       console.log('🔄 Resetting filters');
-      // Reset all filters manually to ensure proper state
-      updateFilter('search', '');
-      updateFilter('sentiment', 'all');
-      updateFilter('riskLevel', 'all');
-      updateFilter('category', 'all');
-      updateFilter('source', 'all');
-      updateFilter('dateRange', { start: '', end: '' });
-      updateFilter('sortBy', 'date');
-      updateFilter('sortOrder', 'desc');
+      // Use centralized reset to ensure all filter keys are handled
+      try {
+        resetFilters();
+      } catch (e) {
+        // Fallback to manual resets if resetFilters not available for any reason
+        updateFilter('search', '');
+        updateFilter('sentiment', 'all');
+        updateFilter('riskLevel', 'all');
+        updateFilter('category', 'all');
+        updateFilter('source', 'all');
+        updateFilter('dateRange', { start: '', end: '' });
+        updateFilter('sortBy', 'date');
+        updateFilter('sortOrder', 'desc');
+        updateFilter('ticker', 'all');
+      }
     } else {
       console.log('🎛️ Dashboard filter change:', key, value);
       updateFilter(key, value);

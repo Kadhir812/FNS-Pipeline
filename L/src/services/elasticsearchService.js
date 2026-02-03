@@ -1,5 +1,6 @@
 import { Client } from '@elastic/elasticsearch';
 import { config } from '../config/config.js';
+import cache from '../utils/cache.js';
 
 const client = new Client({
   node: process.env.ELASTICSEARCH_URL || 'http://localhost:9200'
@@ -30,6 +31,23 @@ class ElasticsearchService {
 
       // Log original and processed query params
       console.log('Original query params:', query);
+
+      // Generate cache key from all query parameters
+      const cacheKey = `search:${JSON.stringify({
+        q, sentiment, category, source, risk_level, 
+        start_date, end_date, sort_by, sort_order, page, page_size
+      })}`;
+
+      // Try cache first
+      const cached = await cache.get(cacheKey);
+      if (cached) {
+        try {
+          console.log('✅ Cache hit for search query');
+          return JSON.parse(cached);
+        } catch (e) {
+          console.warn('Failed to parse cached search results, refetching', e.message);
+        }
+      }
 
       const must = [];
       const filter = [];
@@ -223,7 +241,7 @@ class ElasticsearchService {
       // Log the number of articles found
       console.log(`Search returned ${response.hits.hits.length} articles out of ${response.hits.total.value} total`);
 
-      return {
+      const result = {
         articles: response.hits.hits.map(hit => ({
           ...hit._source,
           _id: hit._id,
@@ -235,6 +253,16 @@ class ElasticsearchService {
         page_size: parseInt(page_size),
         total_pages: Math.ceil(response.hits.total.value / page_size)
       };
+
+      // Cache the result (60 seconds TTL for search results)
+      try {
+        await cache.set(cacheKey, JSON.stringify(result), 60);
+        console.log('✅ Cached search results');
+      } catch (e) {
+        console.warn('Failed to cache search results:', e.message);
+      }
+
+      return result;
     } catch (error) {
       console.error('Error searching articles:', error);
       throw new Error('Failed to search articles');
@@ -244,15 +272,39 @@ class ElasticsearchService {
   // Get article by ID
   async getArticleById(id) {
     try {
+      // Cache key for individual articles
+      const cacheKey = `article:${id}`;
+
+      // Try cache first
+      const cached = await cache.get(cacheKey);
+      if (cached) {
+        try {
+          console.log(`✅ Cache hit for article ${id}`);
+          return JSON.parse(cached);
+        } catch (e) {
+          console.warn('Failed to parse cached article, refetching', e.message);
+        }
+      }
+
       const response = await client.get({
         index: INDEX_NAME,
         id
       });
 
-      return {
+      const result = {
         id: response._id,
         ...response._source
       };
+
+      // Cache the article (5 minutes TTL)
+      try {
+        await cache.set(cacheKey, JSON.stringify(result), 300);
+        console.log(`✅ Cached article ${id}`);
+      } catch (e) {
+        console.warn('Failed to cache article:', e.message);
+      }
+
+      return result;
     } catch (error) {
       if (error.statusCode === 404) {
         return null;
@@ -265,6 +317,20 @@ class ElasticsearchService {
   // Get aggregations for filters
   async getAggregations() {
     try {
+      // Cache key for aggregations
+      const cacheKey = 'aggregations:filters';
+
+      // Try cache first
+      const cached = await cache.get(cacheKey);
+      if (cached) {
+        try {
+          console.log('✅ Cache hit for aggregations');
+          return JSON.parse(cached);
+        } catch (e) {
+          console.warn('Failed to parse cached aggregations, refetching', e.message);
+        }
+      }
+
       const response = await client.search({
         index: INDEX_NAME,
         body: {
@@ -286,10 +352,20 @@ class ElasticsearchService {
         }
       });
 
-      return {
+      const result = {
         categories: response.aggregations.categories.buckets.map(bucket => bucket.key),
         sources: response.aggregations.sources.buckets.map(bucket => bucket.key)
       };
+
+      // Cache aggregations (10 minutes TTL - filters don't change frequently)
+      try {
+        await cache.set(cacheKey, JSON.stringify(result), 600);
+        console.log('✅ Cached aggregations');
+      } catch (e) {
+        console.warn('Failed to cache aggregations:', e.message);
+      }
+
+      return result;
     } catch (error) {
       console.error('Aggregations error:', error);
       return { categories: [], sources: [] };
@@ -299,6 +375,20 @@ class ElasticsearchService {
   // Get similar articles based on key phrases and category
   async getSimilarArticles(articleId, limit = 5) {
     try {
+      // Cache key for similar articles
+      const cacheKey = `similar:${articleId}:${limit}`;
+
+      // Try cache first
+      const cached = await cache.get(cacheKey);
+      if (cached) {
+        try {
+          console.log(`✅ Cache hit for similar articles to ${articleId}`);
+          return JSON.parse(cached);
+        } catch (e) {
+          console.warn('Failed to parse cached similar articles, refetching', e.message);
+        }
+      }
+
       // First, get the article to extract key phrases
       const article = await this.getArticleById(articleId);
       if (!article) {
@@ -339,11 +429,21 @@ class ElasticsearchService {
         }
       });
 
-      return response.hits.hits.slice(0, limit).map(hit => ({
+      const result = response.hits.hits.slice(0, limit).map(hit => ({
         _id: hit._id,
         ...hit._source,
         _score: hit._score
       }));
+
+      // Cache similar articles (5 minutes TTL)
+      try {
+        await cache.set(cacheKey, JSON.stringify(result), 300);
+        console.log(`✅ Cached similar articles for ${articleId}`);
+      } catch (e) {
+        console.warn('Failed to cache similar articles:', e.message);
+      }
+
+      return result;
     } catch (error) {
       console.error('Error getting similar articles:', error);
       throw new Error('Failed to get similar articles');
@@ -381,6 +481,72 @@ class ElasticsearchService {
     } catch (error) {
       console.error('Error getting index mapping:', error);
       throw new Error('Failed to get index mapping');
+    }
+  }
+
+  // Get time-series history for a given symbol (final_score and timestamp)
+  // Params: symbol (string), limit (int), from (epoch ms) optional, to (epoch ms) optional
+  async getArticleHistory(symbol, limit = 100, from = null, to = null) {
+    if (!symbol) return [];
+    try {
+      const keyParts = ['history', symbol.trim().toUpperCase(), from || 'na', to || 'na', limit];
+      const cacheKey = keyParts.join(':');
+
+      // Try cache first
+      const cached = await cache.get(cacheKey);
+      if (cached) {
+        try {
+          return JSON.parse(cached);
+        } catch (e) {
+          // fall through to re-query
+          console.warn('Failed to parse cached history, refetching', e.message);
+        }
+      }
+
+      // Build ES query
+      const must = [
+        { term: { 'symbol.keyword': symbol.trim().toUpperCase() } }
+      ];
+
+      const filter = [];
+      if (from || to) {
+        const range = { range: { publishedAt: {} } };
+        if (from) range.range.publishedAt.gte = Number(from);
+        if (to) range.range.publishedAt.lte = Number(to);
+        filter.push(range);
+      }
+
+      const response = await client.search({
+        index: INDEX_NAME,
+        body: {
+          query: {
+            bool: {
+              must,
+              filter
+            }
+          },
+          sort: [{ publishedAt: { order: 'asc' } }],
+          size: Math.min(limit, 10000),
+          _source: ['publishedAt', 'final_score']
+        }
+      });
+
+      const rows = response.hits.hits.map(h => ({
+        ts: h._source.publishedAt,
+        final_score: typeof h._source.final_score === 'number' ? h._source.final_score : (h._source.final_score ? Number(h._source.final_score) : null)
+      })).filter(r => r.final_score !== null && r.ts !== undefined);
+
+      // Cache the result (stringified)
+      try {
+        await cache.set(cacheKey, JSON.stringify(rows), Number(process.env.HISTORY_CACHE_TTL || 120));
+      } catch (e) {
+        // ignore cache errors
+      }
+
+      return rows;
+    } catch (error) {
+      console.error('Error getting article history:', error);
+      return [];
     }
   }
 }

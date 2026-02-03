@@ -1,3 +1,34 @@
+// Lightweight frontend API helpers
+export async function fetchArticleHistory(symbol, limit = 200, from = null, to = null) {
+  if (!symbol) return [];
+  try {
+    const params = new URLSearchParams();
+    params.set('symbol', symbol);
+    if (limit) params.set('limit', String(limit));
+    if (from) params.set('from', String(from));
+    if (to) params.set('to', String(to));
+
+    const res = await fetch(`/api/v1/articles/history?${params.toString()}`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' }
+    });
+
+    if (!res.ok) {
+      // Try to parse error body for debugging
+      let errText = await res.text().catch(() => '');
+      console.warn('fetchArticleHistory failed', res.status, errText);
+      return [];
+    }
+
+    const payload = await res.json();
+    if (payload && payload.success && Array.isArray(payload.data)) return payload.data;
+    return [];
+  } catch (err) {
+    console.warn('fetchArticleHistory error', err.message || err);
+    return [];
+  }
+}
+
 import axios from 'axios';
 
 // Create axios instance with base configuration

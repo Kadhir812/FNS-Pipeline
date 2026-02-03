@@ -8,6 +8,7 @@ import config from './src/config/config.js';
 // Import routes
 import healthRoutes from './src/routes/health.js';
 import articlesRoutes from './src/routes/articles.js';
+import metricsRoutes from './src/routes/metrics.js';
 
 const app = express();
 
@@ -64,6 +65,7 @@ app.use('/api/v1/health', healthRoutes);
 
 // API routes
 app.use('/api/v1/articles', articlesRoutes);
+app.use('/api/v1/metrics', metricsRoutes);
 
 // Root endpoint
 app.get('/', (req, res) => {

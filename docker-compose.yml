@@ -59,11 +59,6 @@ services:
     networks:
       - etl-net
 
-# === Optional: You can add Airflow or Spark here later ===
-# airflow:
-#   image: apache/airflow:2.9.0
-#   ...
-
 networks:
   etl-net:
     driver: bridge
