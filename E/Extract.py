@@ -49,6 +49,7 @@ from datetime import datetime
 import re
 import hashlib
 import os
+from dotenv import load_dotenv
 from langchain_ollama import OllamaLLM
 from langchain.prompts import PromptTemplate
 from langchain_core.runnables import RunnablePassthrough
@@ -72,7 +73,10 @@ def safe_format(value, format_spec=".2f"):
 
 KAFKA_BROKER = 'localhost:29092'
 TOPIC = 'Financenews-raw'
-MARKETAUX_API_KEY=  'f8mjfUFx1U4xLfJkSxHgJ8wxl6d1pBAMURmyi21N' # <-- Add your API key here
+
+# Load environment variables from E/.env
+load_dotenv(os.path.join(os.path.dirname(__file__), '.env'))
+MARKETAUX_API_KEY = os.getenv('MARKETAUX_API_KEY', '')
 
 # Path to DistilBART model
 DISTILBART_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "T", "models", "distilbart-mnli")
@@ -86,6 +90,8 @@ USE_FINBERT = os.path.exists(FINBERT_PATH)
 
 # Initialize FinBERT model globally (loaded once)
 FINBERT_CLASSIFIER = None
+# Initialize DistilBART model globally (loaded once)
+DISTILBART_CLASSIFIER = None
 
 producer = KafkaProducer(
     bootstrap_servers=KAFKA_BROKER,
@@ -128,6 +134,10 @@ def clean_text(text):
     return ''
 
 def fetch_news():
+    if not MARKETAUX_API_KEY:
+        print("❌ MARKETAUX_API_KEY is missing. Set it in E/.env")
+        return []
+
     url = "https://api.marketaux.com/v1/news/all"
     params = {
         "api_token": MARKETAUX_API_KEY,
@@ -236,6 +246,41 @@ def clean_ollama_response(response):
     
     return cleaned if cleaned else "N/A"
 
+def load_distilbart_classifier():
+    """
+    Load DistilBART classifier once and reuse it across articles.
+    """
+    global DISTILBART_CLASSIFIER
+
+    if DISTILBART_CLASSIFIER is not None:
+        return DISTILBART_CLASSIFIER
+
+    if not USE_DISTILBART:
+        logger.warning("DistilBART model not available")
+        return None
+
+    try:
+        logger.info("Loading DistilBART classifier...")
+        from transformers import pipeline
+
+        DISTILBART_CLASSIFIER = pipeline(
+            "zero-shot-classification",
+            model=DISTILBART_PATH,
+            device=-1,  # CPU
+            max_length=256,
+            truncation=True,
+            padding=True
+        )
+
+        logger.info("DistilBART classifier loaded successfully")
+        print(f"   {Fore.GREEN}✅ DistilBART classifier loaded{Style.RESET_ALL}")
+        return DISTILBART_CLASSIFIER
+    except Exception as e:
+        logger.error(f"Failed to load DistilBART classifier: {str(e)}")
+        print(f"   {Fore.RED}❌ DistilBART loading error: {e}{Style.RESET_ALL}")
+        return None
+
+
 def classify_with_distilbart(text):
     """
     Use DistilBART model to classify financial news into categories A-J
@@ -245,21 +290,16 @@ def classify_with_distilbart(text):
         return None
         
     try:
+        global DISTILBART_CLASSIFIER
         logger.info("Starting DistilBART classification...")
         start_time = time.time()
-        
-        # Only import if model is available
-        from transformers import pipeline
-        
-        # Load model
-        classifier = pipeline(
-            "zero-shot-classification",
-            model=DISTILBART_PATH,
-            device=-1,  # CPU
-            max_length=256,
-            truncation=True,
-            padding=True
-        )
+
+        # Load model once and reuse for all calls
+        if DISTILBART_CLASSIFIER is None:
+            DISTILBART_CLASSIFIER = load_distilbart_classifier()
+
+        if DISTILBART_CLASSIFIER is None:
+            return None
         
         # Truncate text for efficiency
         text_short = text[:200] if len(text) > 200 else text
@@ -302,7 +342,7 @@ def classify_with_distilbart(text):
         
         # Classify with DistilBART
         classification_start = time.time()
-        result = classifier(text_short, categories)
+        result = DISTILBART_CLASSIFIER(text_short, categories)
         classification_time = time.time() - classification_start
         
         predicted_category = result['labels'][0]
@@ -932,6 +972,8 @@ def main():
         print(f"{Fore.GREEN}🤖 ✅ DistilBART ENABLED for news classification{Style.RESET_ALL}")
         print(f"   📁 Model path: {DISTILBART_PATH}")
         logger.info("INITIALIZATION: DistilBART classification ENABLED")
+        # Pre-load DistilBART model
+        load_distilbart_classifier()
     else:
         print(f"{Fore.YELLOW}📝 ⚠️  DistilBART NOT FOUND - Using keyword fallback only{Style.RESET_ALL}")
         logger.warning("INITIALIZATION: DistilBART classification DISABLED - keyword fallback only")
