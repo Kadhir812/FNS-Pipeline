@@ -3,3 +3,5 @@ models/
 website test/
 checkpoint/
 logs/
+.env
+**/.env
