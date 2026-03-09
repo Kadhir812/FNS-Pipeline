@@ -79,6 +79,14 @@ DISTILBART_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "T", 
 # Flag to use DistilBART for classification if available
 USE_DISTILBART = os.path.exists(DISTILBART_PATH)
 
+# Path to FinBERT model for sentiment analysis
+FINBERT_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "T", "models", "finbert")
+# Flag to use FinBERT for sentiment analysis if available
+USE_FINBERT = os.path.exists(FINBERT_PATH)
+
+# Initialize FinBERT model globally (loaded once)
+FINBERT_CLASSIFIER = None
+
 producer = KafkaProducer(
     bootstrap_servers=KAFKA_BROKER,
     value_serializer=lambda v: json.dumps(v).encode('utf-8')
@@ -93,7 +101,7 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - [%(name)s] - %(message)s',
     handlers=[
-        logging.FileHandler(os.path.join(logs_dir, f"extract_paths_{datetime.now().strftime('%Y%m%d')}.log")),
+        logging.FileHandler(os.path.join(logs_dir, f"extract_paths_{datetime.now().strftime('%Y%m%d')}.log"), encoding='utf-8'),
         logging.StreamHandler(sys.stdout)
     ]
 )
@@ -101,10 +109,17 @@ logger = logging.getLogger("extract")
 
 # Add a separate logger for fallback tracking
 fallback_logger = logging.getLogger("fallback_tracker")
-fallback_handler = logging.FileHandler(os.path.join(logs_dir, f"fallback_usage_{datetime.now().strftime('%Y%m%d')}.log"))
+fallback_handler = logging.FileHandler(os.path.join(logs_dir, f"fallback_usage_{datetime.now().strftime('%Y%m%d')}.log"), encoding='utf-8')
 fallback_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
 fallback_logger.addHandler(fallback_handler)
 fallback_logger.setLevel(logging.INFO)
+
+# Add a separate logger for sentiment analysis tracking
+sentiment_logger = logging.getLogger("sentiment_tracker")
+sentiment_handler = logging.FileHandler(os.path.join(logs_dir, f"sentiment_analysis_{datetime.now().strftime('%Y%m%d')}.log"), encoding='utf-8')
+sentiment_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+sentiment_logger.addHandler(sentiment_handler)
+sentiment_logger.setLevel(logging.INFO)
 
 def clean_text(text):
     if text:
@@ -313,6 +328,177 @@ def classify_with_distilbart(text):
         print(f"   ❌ DistilBART error: {e}")
         return None
 
+def load_finbert_classifier():
+    """
+    Load FinBERT model for sentiment analysis (loaded once globally)
+    """
+    global FINBERT_CLASSIFIER
+    
+    if FINBERT_CLASSIFIER is not None:
+        return FINBERT_CLASSIFIER
+    
+    if not USE_FINBERT:
+        logger.warning("FinBERT model not available")
+        return None
+    
+    try:
+        logger.info("Loading FinBERT sentiment model...")
+        from transformers import pipeline
+        
+        FINBERT_CLASSIFIER = pipeline(
+            "sentiment-analysis",
+            model=FINBERT_PATH,
+            device=-1,  # CPU
+            max_length=512,
+            truncation=True
+        )
+        
+        logger.info("FinBERT model loaded successfully")
+        print(f"   {Fore.GREEN}✅ FinBERT sentiment model loaded{Style.RESET_ALL}")
+        return FINBERT_CLASSIFIER
+        
+    except Exception as e:
+        logger.error(f"Failed to load FinBERT model: {str(e)}")
+        print(f"   {Fore.RED}❌ FinBERT loading error: {e}{Style.RESET_ALL}")
+        return None
+
+def analyze_sentiment_with_finbert(text):
+    """
+    Analyze sentiment using FinBERT model
+    
+    Returns:
+        tuple: (sentiment_score, confidence) or (None, None) if failed
+        sentiment_score: float between -1 (negative) and 1 (positive)
+        confidence: float between 0 and 1
+    """
+    global FINBERT_CLASSIFIER
+    
+    if not text or len(text.strip()) < 10:
+        return None, None
+    
+    try:
+        # Load model if not already loaded
+        if FINBERT_CLASSIFIER is None:
+            FINBERT_CLASSIFIER = load_finbert_classifier()
+        
+        if FINBERT_CLASSIFIER is None:
+            return None, None
+        
+        # Truncate text for efficiency
+        text_short = text[:512] if len(text) > 512 else text
+        
+        # Get sentiment prediction
+        start_time = time.time()
+        result = FINBERT_CLASSIFIER(text_short)[0]
+        inference_time = time.time() - start_time
+        
+        label = result['label'].lower()
+        score = result['score']
+        
+        # Convert FinBERT labels to sentiment score (-1 to 1)
+        # FinBERT outputs: positive, negative, neutral
+        if label == 'positive':
+            sentiment_score = score  # 0 to 1
+        elif label == 'negative':
+            sentiment_score = -score  # -1 to 0
+        else:  # neutral
+            sentiment_score = 0.0
+        
+        logger.info(f"FinBERT sentiment: {label} ({sentiment_score:.3f}), confidence: {score:.3f}, time: {inference_time:.2f}s")
+        
+        return sentiment_score, score
+        
+    except Exception as e:
+        logger.error(f"FinBERT sentiment analysis failed: {str(e)}")
+        return None, None
+
+def compare_and_select_sentiment(marketaux_sentiment, marketaux_confidence, 
+                                  finbert_sentiment, finbert_confidence, text, article_num):
+    """
+    Compare MarketAux and FinBERT sentiment scores and select the most reliable one
+    
+    Selection criteria:
+    1. If both available: choose based on confidence and agreement
+    2. If only one available: use that one
+    3. If neither available: return None
+    
+    Returns:
+        tuple: (final_sentiment, final_confidence, source_used)
+    """
+    
+    # Case 1: Both available - compare and select
+    if marketaux_sentiment is not None and finbert_sentiment is not None:
+        # Check if sentiments agree (same direction)
+        same_direction = (marketaux_sentiment * finbert_sentiment) >= 0
+        
+        # Calculate confidence-weighted difference
+        sentiment_diff = abs(marketaux_sentiment - finbert_sentiment)
+        
+        # If they agree and are close, use weighted average
+        if same_direction and sentiment_diff < 0.3:
+            # Confidence-weighted average
+            total_conf = (marketaux_confidence or 0.5) + (finbert_confidence or 0.5)
+            weighted_sentiment = (
+                (marketaux_sentiment * (marketaux_confidence or 0.5)) +
+                (finbert_sentiment * (finbert_confidence or 0.5))
+            ) / total_conf
+            
+            final_confidence = (marketaux_confidence or 0.5) + (finbert_confidence or 0.5)
+            final_confidence = min(final_confidence, 1.0)  # Cap at 1.0
+            
+            sentiment_logger.info(
+                f"Article {article_num}: AGREEMENT - Weighted average used - "
+                f"MarketAux: {marketaux_sentiment:.3f} ({marketaux_confidence:.3f}), "
+                f"FinBERT: {finbert_sentiment:.3f} ({finbert_confidence:.3f}), "
+                f"Final: {weighted_sentiment:.3f} ({final_confidence:.3f})"
+            )
+            print(f"   {Fore.GREEN}🤝 Sentiment: {weighted_sentiment:.3f} (Both agree - weighted avg){Style.RESET_ALL}")
+            
+            return weighted_sentiment, final_confidence, "HYBRID_AGREEMENT"
+        
+        # If they disagree or differ significantly, choose higher confidence
+        else:
+            if (finbert_confidence or 0) > (marketaux_confidence or 0):
+                sentiment_logger.info(
+                    f"Article {article_num}: DISAGREEMENT - FinBERT selected (higher confidence) - "
+                    f"MarketAux: {marketaux_sentiment:.3f} ({marketaux_confidence:.3f}), "
+                    f"FinBERT: {finbert_sentiment:.3f} ({finbert_confidence:.3f})"
+                )
+                print(f"   {Fore.YELLOW}🤖 Sentiment: {finbert_sentiment:.3f} (FinBERT - higher confidence){Style.RESET_ALL}")
+                return finbert_sentiment, finbert_confidence, "FINBERT_DOMINANT"
+            else:
+                sentiment_logger.info(
+                    f"Article {article_num}: DISAGREEMENT - MarketAux selected (higher confidence) - "
+                    f"MarketAux: {marketaux_sentiment:.3f} ({marketaux_confidence:.3f}), "
+                    f"FinBERT: {finbert_sentiment:.3f} ({finbert_confidence:.3f})"
+                )
+                print(f"   {Fore.CYAN}📊 Sentiment: {marketaux_sentiment:.3f} (MarketAux - higher confidence){Style.RESET_ALL}")
+                return marketaux_sentiment, marketaux_confidence, "MARKETAUX_DOMINANT"
+    
+    # Case 2: Only MarketAux available
+    elif marketaux_sentiment is not None:
+        sentiment_logger.info(
+            f"Article {article_num}: MARKETAUX_ONLY - "
+            f"Sentiment: {marketaux_sentiment:.3f} ({marketaux_confidence:.3f})"
+        )
+        print(f"   {Fore.CYAN}📊 Sentiment: {marketaux_sentiment:.3f} (MarketAux only){Style.RESET_ALL}")
+        return marketaux_sentiment, marketaux_confidence, "MARKETAUX_ONLY"
+    
+    # Case 3: Only FinBERT available (MarketAux fallback)
+    elif finbert_sentiment is not None:
+        sentiment_logger.info(
+            f"Article {article_num}: FINBERT_FALLBACK - "
+            f"Sentiment: {finbert_sentiment:.3f} ({finbert_confidence:.3f})"
+        )
+        print(f"   {Fore.YELLOW}🤖 Sentiment: {finbert_sentiment:.3f} (FinBERT fallback){Style.RESET_ALL}")
+        return finbert_sentiment, finbert_confidence, "FINBERT_FALLBACK"
+    
+    # Case 4: Neither available
+    else:
+        sentiment_logger.warning(f"Article {article_num}: NO_SENTIMENT - Both sources failed")
+        print(f"   {Fore.RED}⚠️ Sentiment: N/A (No sources available){Style.RESET_ALL}")
+        return None, None, "NO_SENTIMENT"
+
 redis_client = redis.Redis(host='localhost', port=6379, decode_responses=True)
 
 # Category constants
@@ -360,7 +546,7 @@ def calculate_keyword_scores(text):
                         occurrences = text_lower.count(keyword_lower)
                         
                         # Weight longer/more specific keywords higher
-                        specificity_weight = min(len(keyword_str.split()) * 0.2, 1.0)
+                        specificity_weight = min(len(keyword.split()) * 0.2, 1.0)
                         frequency_weight = min(occurrences * 0.3, 1.0)
                         
                         match_weight += (1.0 + specificity_weight + frequency_weight)
@@ -749,6 +935,16 @@ def main():
     else:
         print(f"{Fore.YELLOW}📝 ⚠️  DistilBART NOT FOUND - Using keyword fallback only{Style.RESET_ALL}")
         logger.warning("INITIALIZATION: DistilBART classification DISABLED - keyword fallback only")
+    
+    if USE_FINBERT:
+        print(f"{Fore.GREEN}🤖 ✅ FinBERT ENABLED for sentiment analysis{Style.RESET_ALL}")
+        print(f"   📁 Model path: {FINBERT_PATH}")
+        logger.info("INITIALIZATION: FinBERT sentiment analysis ENABLED")
+        # Pre-load FinBERT model
+        load_finbert_classifier()
+    else:
+        print(f"{Fore.YELLOW}📝 ⚠️  FinBERT NOT FOUND - Using MarketAux sentiment only{Style.RESET_ALL}")
+        logger.warning("INITIALIZATION: FinBERT sentiment analysis DISABLED - MarketAux only")
         
     if USE_LANGCHAIN:
         print(f"{Fore.GREEN}⚡ ✅ LangChain ENABLED for sequential processing pipeline{Style.RESET_ALL}")
@@ -799,17 +995,32 @@ def main():
                     sentiments.append(entity.get('sentiment_score'))
                     confidences.append(entity.get('match_score'))
 
-                # Use first entity for main fields, but keep all in lists
-                sentiment = sentiments[0] if sentiments else None
-                confidence = confidences[0] if confidences else None
+                # Get MarketAux sentiment (use first entity for main fields, but keep all in lists)
+                marketaux_sentiment = sentiments[0] if sentiments else None
+                marketaux_confidence = confidences[0] if confidences else None
+
+                # Get text for FinBERT analysis
+                article_text = clean_text(article.get('snippet', '') or article.get('description', '') or article.get('title', ''))
+                
+                # Analyze sentiment with FinBERT
+                print(f"\n🔬 Analyzing sentiment for article {i}/{len(articles)}...")
+                finbert_sentiment, finbert_confidence = analyze_sentiment_with_finbert(article_text)
+                
+                # Compare and select best sentiment
+                final_sentiment, final_confidence, sentiment_source = compare_and_select_sentiment(
+                    marketaux_sentiment, marketaux_confidence,
+                    finbert_sentiment, finbert_confidence,
+                    article_text, i
+                )
 
                 payload = {
                     'doc_id': doc_id,
                     'title': article.get('title', ''),
                     'description': article.get('description', ''),
                     'content': article.get('snippet', ''),
-                    'sentiment': sentiment,
-                    'confidence': confidence,
+                    'sentiment': final_sentiment,
+                    'confidence': final_confidence,
+                    'sentiment_source': sentiment_source,  # Track which method was used
                     'publishedAt': publish_date,
                     'source': article.get('source', ''),
                     'link': article.get('url', ''),
@@ -848,7 +1059,12 @@ def main():
             if USE_DISTILBART:
                 print(f"   {Fore.GREEN}🤖 Classification: DistilBART + keyword fallback{Style.RESET_ALL}")
             else:
-                print(f"   {Fore.CYAN}� Classification: Keyword-based only{Style.RESET_ALL}")
+                print(f"   {Fore.CYAN}📝 Classification: Keyword-based only{Style.RESET_ALL}")
+            
+            if USE_FINBERT:
+                print(f"   {Fore.GREEN}💚 Sentiment: Hybrid (FinBERT + MarketAux comparison){Style.RESET_ALL}")
+            else:
+                print(f"   {Fore.CYAN}📊 Sentiment: MarketAux API only{Style.RESET_ALL}")
                 
             if USE_LANGCHAIN:
                 print(f"   {Fore.GREEN}⚡ Processing: LangChain pipeline + Ollama fallback{Style.RESET_ALL}")
