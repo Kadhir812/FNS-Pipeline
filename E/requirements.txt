@@ -1,9 +1,19 @@
-kafka-python
-requests
-transformers>=4.30.0
-redis
-python-dotenv
-langchain
-langchain_ollama
-langchain-core
+# PyTorch CPU index (global directive - must be at top for uv)
+--extra-index-url https://download.pytorch.org/whl/cpu
 
+# === LangChain (split packages for v0.2+) ===
+langchain-core>=0.2.0
+langchain-community>=0.3.28
+langchain-ollama>=0.1.0
+
+# === Transformers (needs torch) ===
+transformers>=4.30.0
+
+# === Core Dependencies ===
+kafka-python>=2.0.2
+redis>=5.0.0
+python-dotenv>=1.0.0
+requests>=2.32.5  # ✅ Explicitly pin to avoid index resolution issues
+
+# === PyTorch CPU-only ===
+torch>=2.1.0

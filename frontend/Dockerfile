@@ -1,20 +1,35 @@
-# Dockerfile for frontend (React + Vite)
-FROM node:18-alpine
+# ---------------------------------------------------------
+# Stage 1: Build (Node.js)
+# ---------------------------------------------------------
+FROM node:18-alpine as builder
 
 WORKDIR /app
 
-# Install dependencies
-COPY package.json package-lock.json* .
-RUN npm install
+# Copy package files first for better cache utilization
+COPY package.json package-lock.json ./
 
-# Copy the rest of the frontend code
+# Install dependencies (use npm ci for reproducible, faster installs)
+RUN npm ci
+
+# Copy source code
 COPY . .
 
-# Build the frontend
+# Build the production bundle
 RUN npm run build
 
-# Expose the port Vite/production build serves on (adjust if needed)
-EXPOSE 5173
+# ---------------------------------------------------------
+# Stage 2: Serve (Nginx)
+# ---------------------------------------------------------
+FROM nginx:alpine-slim
 
-# Start the dev server (for development) or serve the build (for production)
-CMD ["npm", "run", "dev"]
+# Copy built assets from builder stage
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# (Optional) Copy custom nginx config for SPA routing
+# COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Expose port 80 (standard HTTP port for nginx)
+EXPOSE 80
+
+# Run nginx in foreground (Docker requirement)
+CMD ["nginx", "-g", "daemon off;"]

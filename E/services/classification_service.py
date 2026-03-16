@@ -5,7 +5,7 @@ from .logging_setup import logger, fallback_logger
 
 DISTILBART_CLASSIFIER = None
 
-redis_client = redis.Redis(host="localhost", port=6379, decode_responses=True)
+redis_client = redis.Redis(host="redis", port=6379, decode_responses=True)
 
 CATEGORY_LETTERS = "ABCDEFGHIJKLMN"
 CATEGORY_LIST = list(CATEGORY_LETTERS)

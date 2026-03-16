@@ -1,14 +1,16 @@
+
 services:
   kafka:
-    image: apache/kafka-native:latest
+    image: apache/kafka:latest
     container_name: kafka
     ports:
       - "9092:9092"
     environment:
       KAFKA_NODE_ID: 1
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,INTERNAL://0.0.0.0:29092,CONTROLLER://0.0.0.0:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT,INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
       KAFKA_LOG_DIRS: /var/lib/kafka/data
@@ -19,6 +21,11 @@ services:
       - d:/bigdata/kafka_data:/var/lib/kafka/data
     networks:
       - etl-net
+    healthcheck:
+      test: ["CMD", "bash", "-c", "echo > /dev/tcp/localhost/9092"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.13.4
@@ -33,6 +40,11 @@ services:
       - d:/bigdata/es_data:/usr/share/elasticsearch/data
     networks:
       - etl-net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
     image: redis:7.2.4
@@ -43,6 +55,11 @@ services:
       - d:/bigdata/redis_data:/data
     networks:
       - etl-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   ollama:
     image: ollama/ollama:latest
@@ -54,60 +71,77 @@ services:
     networks:
       - etl-net
 
-#   extract:
-#     build:
-#       context: ./E
-#     env_file:
-#       - ./E/.env
-#     volumes:
-#       - ./E:/app
-#       - ./T/models:/app/T/models
-#     depends_on:
-#       - kafka
-#       - redis
-#       - ollama
-#     networks:
-#       - etl-net
+  extract:
+    build:
+      context: ./E
+      dockerfile: Dockerfile
+    env_file:
+      - ./E/.env  # ✅ Mounted at runtime, not baked into image
+    volumes:
+    - ./E/models:/app/models:ro 
+    - ./E/logs:/app/logs
+    - ./E/news_archive.jsonl:/app/news_archive.jsonl  # cleaner mount — flat, no nested E/
+    environment:
+    - MODELS_DIR=/app/models
+    - APP_DIR=/app
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - etl-net
 
-#   transform:
-#     build:
-#       context: ./T
-#     volumes:
-#       - ./T:/app
-#       - ./T/models:/app/models
-#     depends_on:
-#       - kafka
-#       - elasticsearch
-#     networks:
-#       - etl-net
+  transform:
+    build:
+      context: ./T
+      dockerfile: Dockerfile
+    command: >
+      spark-submit \
+      --jars /app/jars/elasticsearch-spark-30_2.12-8.10.2.jar,/app/jars/spark-sql-kafka-0-10_2.12-3.3.0.jar \
+      Transform.py
+    depends_on:
+      kafka:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - etl-net
 
-#   l:
-#     build:
-#       context: ./L
-#     env_file:
-#       - ./L/.env
-#     volumes:
-#       - ./L:/app
-#     ports:
-#       - "3001:3001"
-#     depends_on:
-#       - elasticsearch
-#       - redis
-#     networks:
-#       - etl-net
+  l:
+    build:
+      context: ./L
+    env_file:
+      - ./L/.env
+    volumes:
+      - ./L:/app
+    ports:
+      - "3001:3001"
+    depends_on:
+      - elasticsearch
+      - redis
+    networks:
+      - etl-net
 
-#   frontend:
-#     build:
-#       context: ./frontend
-#     volumes:
-#       - ./frontend:/app
-#     ports:
-#       - "5173:5173"
-#     depends_on:
-#       - l
-#     networks:
-#       - etl-net
+  frontend:
+    build:
+      context: ./frontend
+    volumes:
+      - ./frontend:/app
+    ports:
+      - "5173:80"
+    depends_on:
+      - l
+    networks:
+      - etl-net
 
 networks:
   etl-net:
     driver: bridge
+
+volumes:
+  extract_models:

@@ -1,0 +1,33 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+venv
+ENV
+.venv
+pip-log.txt
+pip-delete-this-directory.txt
+.tox
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.mypy_cache
+.pytest_cache
+.hypothesis
+models/          <-- CRITICAL: Do not copy models if you mount them at runtime
+data/            <-- CRITICAL: Do not copy raw data
+jars/*.jar       <-- Optional: Only if you want to copy jars dynamically, otherwise keep them
+.DS_Store
+.idea
+.vscode
+*.md
+docker-compose.yml
+Dockerfile

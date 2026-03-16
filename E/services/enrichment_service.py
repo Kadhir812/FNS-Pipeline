@@ -3,7 +3,7 @@ import re
 import time
 import requests
 from langchain_ollama import OllamaLLM
-from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.runnables import RunnableLambda
 from .config import OLLAMA_MODEL, OLLAMA_URL
@@ -80,7 +80,7 @@ def ollama_query(prompt, text):
 
 
 def get_ollama_model():
-    return OllamaLLM(model=OLLAMA_MODEL, base_url="http://localhost:11434")
+    return OllamaLLM(model=OLLAMA_MODEL, base_url="http://ollama:11434")
 
 
 def create_news_processing_chain():

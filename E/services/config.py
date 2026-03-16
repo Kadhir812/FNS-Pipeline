@@ -1,25 +1,31 @@
 import os
 from dotenv import load_dotenv
 
-SERVICE_DIR = os.path.dirname(__file__)
-BASE_DIR = os.path.dirname(SERVICE_DIR)
-ROOT_DIR = os.path.dirname(BASE_DIR)
+# Anchor everything to /app inside Docker, or the actual project root locally
+APP_DIR = os.environ.get("APP_DIR", os.path.join(os.path.dirname(__file__), ".."))
+APP_DIR = os.path.normpath(APP_DIR)
 
-# Load environment variables from E/.env
-load_dotenv(os.path.join(BASE_DIR, ".env"))
+load_dotenv(os.path.join(APP_DIR, ".env"))
 
-KAFKA_BROKER = "localhost:29092"
-TOPIC = "Financenews-raw"
+KAFKA_BROKER = os.getenv("KAFKA_BROKER", "kafka:29092")
+TOPIC = os.getenv("KAFKA_TOPIC", "Financenews-raw")
 MARKETAUX_API_KEY = os.getenv("MARKETAUX_API_KEY", "")
 
-DISTILBART_PATH = os.path.join(ROOT_DIR, "T", "models", "distilbart-mnli")
-FINBERT_PATH = os.path.join(ROOT_DIR, "T", "models", "finbert")
+MODELS_DIR = os.getenv("MODELS_DIR", os.path.join(APP_DIR, "models"))
+
+DISTILBART_PATH = os.path.join(MODELS_DIR, "distilbart-mnli")
+FINBERT_PATH    = os.path.join(MODELS_DIR, "finbert")
 
 USE_DISTILBART = os.path.exists(DISTILBART_PATH)
-USE_FINBERT = os.path.exists(FINBERT_PATH)
+USE_FINBERT    = os.path.exists(FINBERT_PATH)
 
-OLLAMA_URL = "http://localhost:11434/api/generate"
-OLLAMA_MODEL = "deepseek-r1:1.5b"
+# Debug — remove after confirming
+print(f"[DEBUG] MODELS_DIR: {MODELS_DIR}")
+print(f"[DEBUG] USE_DISTILBART: {USE_DISTILBART} → {DISTILBART_PATH}")
+print(f"[DEBUG] USE_FINBERT:    {USE_FINBERT} → {FINBERT_PATH}")
 
-LOGS_DIR = os.path.join(BASE_DIR, "logs")
-ARCHIVE_PATH = os.path.join(BASE_DIR, "news_archive.jsonl")
+OLLAMA_URL   = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:1.5b")
+
+LOGS_DIR     = os.path.join(APP_DIR, "logs")
+ARCHIVE_PATH = os.path.join(APP_DIR, "news_archive.jsonl")

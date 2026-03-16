@@ -1,22 +1,61 @@
-# Dockerfile for T (Transform) service using PySpark and custom JARs
-FROM spark:python3
+# =========================================================
+# STAGE 1: BUILDER
+# =========================================================
+FROM spark:python3 AS builder
 
 USER root
 WORKDIR /app
 
-# Copy all code and JARs
-COPY . /app
+# Install system build dependencies
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    make \
+    libssl-dev \
+    libffi-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Install Python dependencies
+# Copy requirements first for cache
+COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Set environment variables for PySpark (optional, but explicit)
+# Copy application code and JARs
+COPY Transform.py .
+COPY jars/ ./jars/
+
+# Clean up python cache
+RUN find /usr/local/lib/python3.*/site-packages -type d -name "__pycache__" -exec rm -rf {} + || true
+
+# =========================================================
+# STAGE 2: RUNTIME
+# =========================================================
+FROM spark:python3 AS runtime
+
+USER root
+WORKDIR /app
+
+# Set Environment Variables
 ENV PYSPARK_PYTHON=python3
 ENV PYSPARK_DRIVER_PYTHON=python3
 ENV PYTHONUNBUFFERED=1
 
-# Mount the models directory from host at runtime (do not copy in Dockerfile)
-# Example: -v d:/big data pipeline/T/models:/app/models
+# 1. Copy installed Python packages from Builder
+COPY --from=builder /usr/local/lib/python3.*/site-packages /usr/local/lib/python3.*/site-packages
 
-# Entrypoint: run Transform.py with spark-submit and all required JARs
-CMD ["spark-submit", "--jars", "/app/jars/elasticsearch-spark-30_2.12-8.10.2.jar,/app/jars/spark-sql-kafka-0-10_2.12-3.3.0.jar,/app/jars/slf4j-api-1.7.32.jar,/app/jars/kafka-clients-3.0.0.jar,/app/jars/spark-token-provider-kafka-0-10_2.12-3.3.0.jar,/app/jars/commons-pool2-2.11.1.jar", "Transform.py"]
+# 2. Copy application code and JARs
+COPY --from=builder /app/Transform.py .
+COPY --from=builder /app/jars ./jars
+
+# 3. Fix permissions for spark user
+RUN chown -R spark:spark /app
+
+# DO NOT set USER or CMD yet - let base image entrypoint handle it
+# The spark:python3 image has an entrypoint that sets up PATH and SPARK_HOME
+
+# Switch to spark user (optional, but recommended for security)
+USER spark
+
+# Pass the script as an ARGUMENT to the entrypoint
+# The entrypoint will invoke spark-submit with these args
+CMD ["Transform.py"]

@@ -4,6 +4,7 @@ from .config import KAFKA_BROKER, TOPIC
 
 
 def create_producer():
+    print(f"[DEBUG] Kafka broker used: {KAFKA_BROKER}")
     return KafkaProducer(
         bootstrap_servers=KAFKA_BROKER,
         value_serializer=lambda value: json.dumps(value).encode("utf-8"),
