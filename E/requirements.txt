@@ -1,6 +1,9 @@
-kafka
+kafka-python
 requests
 transformers>=4.30.0
-torch>=1.9.0
 redis
 python-dotenv
+langchain
+langchain_ollama
+langchain-core
+
