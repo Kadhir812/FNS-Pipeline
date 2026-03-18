@@ -1,4 +1,3 @@
-
 services:
   kafka:
     image: apache/kafka:latest
@@ -41,7 +40,7 @@ services:
     networks:
       - etl-net
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      test: ["CMD", "sh", "-c", "curl -s http://localhost:9200/_cluster/health | grep -E '\"status\":\"(green|yellow)\"'"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -70,27 +69,34 @@ services:
       - d:/ollama:/root/.ollama
     networks:
       - etl-net
+    # healthcheck via HTTP — ollama exposes /api/tags when ready
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 8
+      start_period: 20s   # give ollama time to load models before checks begin
 
   extract:
     build:
       context: ./E
       dockerfile: Dockerfile
     env_file:
-      - ./E/.env  # ✅ Mounted at runtime, not baked into image
+      - ./E/.env
     volumes:
-    - ./E/models:/app/models:ro 
-    - ./E/logs:/app/logs
-    - ./E/news_archive.jsonl:/app/news_archive.jsonl  # cleaner mount — flat, no nested E/
+      - ./E/models:/app/models:ro
+      - ./E/logs:/app/logs
+      - ./E/news_archive.jsonl:/app/news_archive.jsonl
     environment:
-    - MODELS_DIR=/app/models
-    - APP_DIR=/app
+      - MODELS_DIR=/app/models
+      - APP_DIR=/app
     depends_on:
       kafka:
         condition: service_healthy
       redis:
         condition: service_healthy
       ollama:
-        condition: service_started
+        condition: service_healthy   # upgraded from service_started
     restart: unless-stopped
     networks:
       - etl-net
@@ -99,10 +105,9 @@ services:
     build:
       context: ./T
       dockerfile: Dockerfile
-    command: >
-      spark-submit \
-      --jars /app/jars/elasticsearch-spark-30_2.12-8.10.2.jar,/app/jars/spark-sql-kafka-0-10_2.12-3.3.0.jar \
-      Transform.py
+    # ✅ No `command:` override — entrypoint.sh handles jar discovery dynamically
+    volumes:
+      - ./T/jars:/app/T/jars:ro   # jars mounted as volume, not baked into image
     depends_on:
       kafka:
         condition: service_healthy
@@ -118,20 +123,22 @@ services:
     env_file:
       - ./L/.env
     volumes:
-      - ./L:/app
+      # ✅ Mount only what needs to be live-editable, not the entire /app
+      - ./L/logs:/app/logs
     ports:
       - "3001:3001"
     depends_on:
-      - elasticsearch
-      - redis
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     networks:
       - etl-net
 
   frontend:
     build:
       context: ./frontend
-    volumes:
-      - ./frontend:/app
+    # ✅ No volume mount — serve the built dist, don't overwrite it
     ports:
       - "5173:80"
     depends_on:
@@ -143,5 +150,4 @@ networks:
   etl-net:
     driver: bridge
 
-volumes:
-  extract_models:
+# ✅ Removed unused extract_models named volume

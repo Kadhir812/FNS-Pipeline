@@ -41,7 +41,7 @@ import re
 import os
 import shutil
 
-CHECKPOINT_PATH = "D:/big data pipeline/T/checkpoint"
+# CHECKPOINT_PATH = "D:/big data pipeline/T/checkpoint"
 # NOTE: For production, do NOT clear checkpoint directory and use latest offsets
 # if os.path.exists(CHECKPOINT_PATH):
 #     try:
@@ -49,7 +49,7 @@ CHECKPOINT_PATH = "D:/big data pipeline/T/checkpoint"
 #         print("Checkpoint directory cleared")
 #     except Exception as e:
 #         print(f"Could not clear checkpoint: {str(e)}")
-
+CHECKPOINT_PATH = os.environ.get("CHECKPOINT_PATH", "/tmp/spark-checkpoint")
 # === Spark Session ===
 JARS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "jars"))
 os.environ['HADOOP_OPTS'] = '-Djava.library.path='
@@ -92,7 +92,7 @@ schema = StructType([
 
 df_raw = spark.readStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "localhost:29092") \
+    .option("kafka.bootstrap.servers", "kafka:29092") \
     .option("subscribe", "Financenews-raw") \
     .option("startingOffsets", "earliest") \
     .option("failOnDataLoss", "false") \
@@ -287,7 +287,7 @@ def write_to_es(batch_df, batch_id):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
             s.settimeout(2)
-            s.connect(("localhost", 9200))
+            s.connect(("elasticsearch", 9200))
             s.close()
             print("Elasticsearch port is reachable")
         except Exception as e:
@@ -311,7 +311,7 @@ def write_to_es(batch_df, batch_id):
             print("Writing batch to Elasticsearch...")
             final_df.write \
                 .format("org.elasticsearch.spark.sql") \
-                .option("es.nodes", "localhost") \
+                .option("es.nodes", "elasticsearch") \
                 .option("es.port", "9200") \
                 .option("es.nodes.wan.only", "true") \
                 .option("es.net.ssl", "false") \
@@ -346,7 +346,7 @@ import requests
 import json
 try:
     # Check if index exists
-    index_exists = requests.head("http://localhost:9200/news-analysis")
+    index_exists = requests.head("http://elasticsearch:9200/news-analysis")
     if index_exists.status_code == 404:
         print("Creating Elasticsearch index manually...")
         index_mappings = {
@@ -379,7 +379,7 @@ try:
             }
         }
         create_response = requests.put(
-            "http://localhost:9200/news-analysis",
+            "http://elasticsearch:9200/news-analysis",
             data=json.dumps(index_mappings),
             headers={"Content-Type": "application/json"}
         )
