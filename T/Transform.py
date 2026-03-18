@@ -1,400 +1,453 @@
 """
-TRANSFORM.PY DOCUMENTATION
-==========================
+TRANSFORM.PY
+============
+Reads financial news from Kafka, enriches with risk/sentiment analysis,
+writes to Elasticsearch.
 
-Purpose:
---------
-This script processes financial news articles streamed from Kafka, enriches them with risk and sentiment analysis, and writes the results to Elasticsearch for search and analytics.
+Pipeline:
+  Kafka → Parse JSON → Enrich (risk, impact, scores) → Elasticsearch
 
-Key Steps:
-----------
-1. Read news articles from Kafka stream.
-2. Normalize confidence scores (so weak confidence doesn't inflate results).
-3. Calculate risk level using keywords and context (e.g., M&A, commodity news).
-4. Map risk level to a numeric score for further calculations.
-5. Assess the impact of each article using sentiment and risk (impact assessment).
-6. Calculate a final score for each article, balancing sentiment and risk (confidence-weighted risk formula).
-7. Save enriched articles to Elasticsearch for easy search and analysis.
-
-How Risk & Sentiment Work:
---------------------------
-- Risk is determined by matching keywords and context (e.g., "merger", "commodity").
-- Sentiment is taken from the model/API and can be overridden if the context is clear.
-- Impact assessment is a two-step process: first by sentiment, then risk can override if high.
-- Final score uses both sentiment and risk, weighted by confidence (so strong signals aren't unfairly penalized).
-
-Outputs:
---------
-- Each processed article is saved to Elasticsearch with all enrichment fields: title, summary, sentiment, risk, impact assessment, final score, tickers, and more.
-
-Who Should Use This:
---------------------
-- Anyone who wants to analyze financial news for risk, sentiment, and trading signals, even with no prior coding or data experience.
-- All steps are automated and require no manual intervention.
-
+Fixes applied:
+  - Stream started exactly once, after index setup
+  - spark.jars removed (entrypoint.sh handles jar loading)
+  - confidence normalized from 0–100 to 0–1 (MarketAux scale fix)
+  - confidence threshold corrected to 0.0–1.0 scale
+  - conf_norm max_conf corrected to 1.0
+  - Risk no longer blindly overwrites positive sentiment (RISKY BULLISH)
+  - Index creation happens before stream starts
+  - batch_df cached to avoid multiple scans
+  - repartition(4) before ES write for better throughput
+  - Keyword detection uses rlike regex instead of chained contains()
+  - Timestamp parsing handles timezone offset formats (+00:00)
+  - unpersist() always called in finally block
 """
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import col, from_json, lower, when, to_timestamp, coalesce, lit, log, size
-from pyspark.sql.types import StructType, StringType, StructField, DoubleType
-from pyspark.sql.functions import sha2, concat_ws
-import re
+
 import os
-import shutil
+import re
+import json
+import socket
+import requests
+import traceback
 
-# CHECKPOINT_PATH = "D:/big data pipeline/T/checkpoint"
-# NOTE: For production, do NOT clear checkpoint directory and use latest offsets
-# if os.path.exists(CHECKPOINT_PATH):
-#     try:
-#         shutil.rmtree(CHECKPOINT_PATH)
-#         print("Checkpoint directory cleared")
-#     except Exception as e:
-#         print(f"Could not clear checkpoint: {str(e)}")
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import (
+    col, from_json, lower, when, to_timestamp,
+    coalesce, lit, log, size, sha2, concat_ws
+)
+from pyspark.sql.types import (
+    StructType, StructField,
+    StringType, DoubleType, ArrayType
+)
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
 CHECKPOINT_PATH = os.environ.get("CHECKPOINT_PATH", "/tmp/spark-checkpoint")
-# === Spark Session ===
-JARS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "jars"))
-os.environ['HADOOP_OPTS'] = '-Djava.library.path='
+ES_HOST         = os.environ.get("ES_HOST",         "elasticsearch")
+ES_PORT         = os.environ.get("ES_PORT",         "9200")
+KAFKA_BROKER    = os.environ.get("KAFKA_BROKER",    "kafka:29092")
+KAFKA_TOPIC     = os.environ.get("KAFKA_TOPIC",     "Financenews-raw")
+ES_INDEX        = os.environ.get("ES_INDEX",        "news-analysis")
+ES_URL          = f"http://{ES_HOST}:{ES_PORT}"
 
+# ============================================================
+# SPARK SESSION
+# ✅ No spark.jars — entrypoint.sh passes --jars and extraClassPath
+# ============================================================
 spark = SparkSession.builder \
     .appName("NewsSentimentTransform") \
     .config("spark.hadoop.io.nativeio.NativeIO", "false") \
-    .config(
-        "spark.jars",
-        f"{JARS_DIR}/elasticsearch-spark-30_2.12-8.10.2.jar,"
-        f"{JARS_DIR}/spark-sql-kafka-0-10_2.12-3.3.0.jar,"
-        f"{JARS_DIR}/slf4j-api-1.7.32.jar,"
-        f"{JARS_DIR}/kafka-clients-3.0.0.jar,"
-        f"{JARS_DIR}/spark-token-provider-kafka-0-10_2.12-3.3.0.jar,"
-        f"{JARS_DIR}/commons-pool2-2.11.1.jar"
-    ) \
     .getOrCreate()
 
-# === Schema ===
-from pyspark.sql.types import ArrayType
+spark.sparkContext.setLogLevel("WARN")
+
+# ============================================================
+# SCHEMA
+# ============================================================
 schema = StructType([
-    StructField("title", StringType()),
-    StructField("description", StringType()),
-    StructField("content", StringType()),
-    StructField("publishedAt", StringType()),
-    StructField("source", StringType()),
-    StructField("sentiment", DoubleType()),   
-    StructField("confidence", DoubleType()),  
-    StructField("risk_score", DoubleType()),
-    StructField("link", StringType()),
-    StructField("image_url", StringType()),
-    StructField("key_phrases", StringType()),
-    StructField("category", StringType()),
-    StructField("summary", StringType()),
+    StructField("title",             StringType()),
+    StructField("description",       StringType()),
+    StructField("content",           StringType()),
+    StructField("publishedAt",       StringType()),
+    StructField("source",            StringType()),
+    StructField("sentiment",         DoubleType()),
+    StructField("confidence",        DoubleType()),
+    StructField("risk_score",        DoubleType()),
+    StructField("link",              StringType()),
+    StructField("image_url",         StringType()),
+    StructField("key_phrases",       StringType()),
+    StructField("category",          StringType()),
+    StructField("summary",           StringType()),
     StructField("impact_assessment", StringType()),
-    StructField("symbols", ArrayType(StringType())),
-    StructField("entity_names", ArrayType(StringType())),
-    StructField("doc_id", StringType())
+    StructField("content_quality",   StringType()),
+    StructField("symbols",           ArrayType(StringType())),
+    StructField("entity_names",      ArrayType(StringType())),
+    StructField("doc_id",            StringType()),
 ])
 
+# ============================================================
+# KAFKA SOURCE
+# ============================================================
 df_raw = spark.readStream \
     .format("kafka") \
-    .option("kafka.bootstrap.servers", "kafka:29092") \
-    .option("subscribe", "Financenews-raw") \
-    .option("startingOffsets", "earliest") \
+    .option("kafka.bootstrap.servers", KAFKA_BROKER) \
+    .option("subscribe", KAFKA_TOPIC) \
+    .option("startingOffsets", "latest") \
     .option("failOnDataLoss", "false") \
     .load()
 
-df_json = df_raw.selectExpr("CAST(value AS STRING) as json") \
+df_json = df_raw \
+    .selectExpr("CAST(value AS STRING) as json") \
     .withColumn("data", from_json(col("json"), schema)) \
-    .select("data.*")
+    .select("data.*") \
+    .withColumn(
+        "symbol",
+        when(
+            col("symbols").isNotNull() & (size(col("symbols")) > 0),
+            col("symbols")[0]
+        ).otherwise(lit(None))
+    ) \
+    .withColumn(
+        "entity_name",
+        when(
+            col("entity_names").isNotNull() & (size(col("entity_names")) > 0),
+            col("entity_names")[0]
+        ).otherwise(lit(None))
+    )
 
-# Create symbol and entity_name from first elements of arrays
-from pyspark.sql.functions import expr
-df_json = df_json.withColumn(
-    "symbol",
-    when((col("symbols").isNotNull()) & (size(col("symbols")) > 0), col("symbols")[0])
-    .otherwise(lit(None))
-).withColumn(
-    "entity_name",
-    when((col("entity_names").isNotNull()) & (size(col("entity_names")) > 0), col("entity_names")[0])
-    .otherwise(lit(None))
-)
-
-# === Read risk keywords from file ===
+# ============================================================
+# KEYWORD CONDITIONS
+# ✅ rlike regex — single eval per column, faster than chained contains()
+# ============================================================
 KEYWORDS_PATH = os.path.join(os.path.dirname(__file__), "enhanced_risk_keywords.txt")
 try:
-    with open(KEYWORDS_PATH, 'r') as f:
+    with open(KEYWORDS_PATH, "r") as f:
         keywords = [line.strip().lower() for line in f if line.strip()]
+    print(f"Loaded {len(keywords)} risk keywords")
 except Exception:
     keywords = ["risk", "loss", "default", "bankruptcy", "crash"]
     print("Warning: Could not load risk keywords, using default list")
 
-# Build condition for any keyword match in content or title
-keyword_condition = None
-for word in keywords:
-    cond = (lower(col("content")).contains(word)) | (lower(col("title")).contains(word))
-    keyword_condition = cond if keyword_condition is None else (keyword_condition | cond)
+MA_KEYWORDS = [
+    "m&a", "merger", "acquisition", "deal",
+    "strategic", "expansion", "growth"
+]
+COMMODITY_KEYWORDS = [
+    "output", "capacity", "margin", "commodity",
+    "smelter", "cut", "price", "supply", "demand"
+]
 
-# === Map sentiment to impact assessment directly in SQL expressions ===
+def build_keyword_condition(word_list, *columns):
+    """Build single rlike OR regex across multiple columns."""
+    escaped   = [re.escape(w) for w in word_list]
+    pattern   = "|".join(escaped)
+    condition = None
+    for column in columns:
+        cond      = lower(col(column)).rlike(pattern)
+        condition = cond if condition is None else (condition | cond)
+    return condition
+
+keyword_condition   = build_keyword_condition(keywords,           "content", "title")
+ma_condition        = build_keyword_condition(MA_KEYWORDS,        "title",   "content")
+commodity_condition = build_keyword_condition(COMMODITY_KEYWORDS, "title",   "content")
+
+# ============================================================
+# ELASTICSEARCH INDEX SETUP
+# ============================================================
+def ensure_index_exists():
+    """Create ES index with correct mappings if it doesn't exist."""
+    try:
+        resp = requests.head(f"{ES_URL}/{ES_INDEX}", timeout=10)
+        if resp.status_code == 200:
+            print(f"Index '{ES_INDEX}' already exists")
+            return True
+
+        if resp.status_code == 404:
+            print(f"Creating index '{ES_INDEX}'...")
+            mappings = {
+                "mappings": {
+                    "properties": {
+                        "title":                      {"type": "text"},
+                        "description":                {"type": "text"},
+                        "content":                    {"type": "text"},
+                        "publishedAt":                {"type": "date", "format": "epoch_millis"},
+                        "source":                     {"type": "keyword"},
+                        "sentiment":                  {"type": "float"},
+                        "confidence":                 {"type": "float"},
+                        "conf_norm":                  {"type": "float"},
+                        "risk_level":                 {"type": "keyword"},
+                        "risk_raw":                   {"type": "float"},
+                        "risk_adj":                   {"type": "float"},
+                        "key_phrases":                {"type": "text"},
+                        "category":                   {"type": "keyword"},
+                        "summary":                    {"type": "text"},
+                        "impact_assessment":          {"type": "keyword"},
+                        "impact_score":               {"type": "float"},
+                        "final_score":                {"type": "float"},
+                        "sentiment_confidence_score": {"type": "float"},
+                        "content_quality":            {"type": "keyword"},
+                        "symbol":                     {"type": "keyword"},
+                        "entity_name":                {"type": "keyword"},
+                        "link":                       {"type": "keyword"},
+                        "image_url":                  {"type": "keyword"},
+                        "doc_id":                     {"type": "keyword"},
+                    }
+                }
+            }
+            create = requests.put(
+                f"{ES_URL}/{ES_INDEX}",
+                data=json.dumps(mappings),
+                headers={"Content-Type": "application/json"},
+                timeout=10
+            )
+            print(f"Index creation: {create.status_code} — {create.text}")
+            return create.status_code in (200, 201)
+
+    except Exception as e:
+        print(f"ERROR: Could not verify/create ES index: {e}")
+        return False
+
+# ============================================================
+# BATCH PROCESSOR
+# ============================================================
 def write_to_es(batch_df, batch_id):
     try:
+        # ✅ Cache once — single scan reused by all downstream operations
+        batch_df.cache()
         n = batch_df.count()
+
         if n == 0:
-            print("Batch is empty, skipping.")
+            print(f"Batch {batch_id}: empty, skipping.")
+            batch_df.unpersist()
             return
+
         print(f"Processing batch {batch_id} with {n} records")
 
-        # Fill in nulls to avoid errors
+        # ── Fill nulls ──────────────────────────────────────────────
         batch_df = batch_df.fillna({
-            'sentiment': 0.0, 
-            'confidence': 0.0, 
-            'content': '', 
-            'description': '', 
-            'title': '',
-            'risk_score': 0.0,
-            'impact_assessment': 'NEUTRAL',
-            'symbol': ''
+            "sentiment":         0.0,
+            "confidence":        0.0,
+            "content":           "",
+            "description":       "",
+            "title":             "",
+            "risk_score":        0.0,
+            "impact_assessment": "NEUTRAL",
+            "content_quality":   "unknown",
+            "symbol":            "",
         })
 
-        # CHANGE 1: Improved confidence normalization using logarithmic scaling
-        # This prevents saturation and maintains resolution across the confidence range
-        max_conf = 1000  # Tunable parameter based on your data distribution
-
+        # ── Normalize confidence ────────────────────────────────────
+        # ✅ MarketAux returns confidence as 0–100, normalize to 0–1
         enriched_df = batch_df.withColumn(
+            "confidence",
+            when(col("confidence") > 1.0, col("confidence") / 100.0)
+            .otherwise(col("confidence"))
+        )
+
+        # ── Confidence normalisation ────────────────────────────────
+        # ✅ max_conf = 1.0 — confidence now correctly 0.0–1.0
+        # log(1+x)/log(2) scales [0,1] → [0,1] smoothly
+        enriched_df = enriched_df.withColumn(
             "conf_norm",
             when(col("confidence").isNull() | (col("confidence") <= 0), 0.0)
-            .otherwise(log(1 + col("confidence")) / log(1 + lit(max_conf)))
+            .otherwise(
+                log(1 + col("confidence")) / log(1 + lit(1.0))
+            )
         )
 
-        # CHANGE 2: Context-aware risk level calculation
-        # Add M&A, strategic, and commodity context
-    # from pyspark.sql.functions import lower  # already imported above
-        ma_keywords = ["m&a", "merger", "acquisition", "deal", "strategic", "expansion", "growth"]
-        commodity_keywords = ["output", "capacity", "margin", "commodity", "smelter", "cut", "price", "supply", "demand"]
-        ma_condition = None
-        for word in ma_keywords:
-            cond = lower(col("title")).contains(word) | lower(col("content")).contains(word)
-            ma_condition = cond if ma_condition is None else (ma_condition | cond)
-        commodity_condition = None
-        for word in commodity_keywords:
-            cond = lower(col("title")).contains(word) | lower(col("content")).contains(word)
-            commodity_condition = cond if commodity_condition is None else (commodity_condition | cond)
+        # ── Risk level ──────────────────────────────────────────────
         enriched_df = enriched_df.withColumn(
             "risk_level",
-            when(
-                keyword_condition & (col("sentiment") < 0),
-                lit("high_risk")
-            ).when(
-                ma_condition & (col("sentiment") > 0.2),
-                lit("medium_risk")
-            ).when(
-                commodity_condition & (col("sentiment") < 0),
-                lit("high_risk")
-            ).when(
-                col("sentiment") < 0,
-                lit("moderate_risk")
-            ).otherwise(lit("low_risk"))
+            when(keyword_condition    & (col("sentiment") < 0),   lit("high_risk"))
+            .when(commodity_condition & (col("sentiment") < 0),   lit("high_risk"))
+            .when(ma_condition        & (col("sentiment") > 0.2), lit("medium_risk"))
+            .when(col("sentiment") < 0,                           lit("moderate_risk"))
+            .otherwise(                                            lit("low_risk"))
         )
 
-        # CHANGE 3: Convert risk level to numeric base score
+        # ── Risk base score ─────────────────────────────────────────
         enriched_df = enriched_df.withColumn(
             "risk_base",
-            when(col("risk_level") == "high_risk", 0.9)
+            when(col("risk_level") == "high_risk",      0.9)
             .when(col("risk_level") == "moderate_risk", 0.7)
-            .when(col("risk_level") == "medium_risk", 0.5)
-            .otherwise(0.1)
+            .when(col("risk_level") == "medium_risk",   0.5)
+            .otherwise(                                  0.1)
         )
 
-        # CHANGE 4: Calculate final risk_score with hybrid adjustment
-        enriched_df = enriched_df.withColumn(
-            "risk_score",
-            (col("risk_base") * 0.8) + (col("risk_base") * col("conf_norm") * 0.2)
-        )
+        # ── Risk score, raw, adjusted ───────────────────────────────
+        enriched_df = enriched_df \
+            .withColumn("risk_score",
+                (col("risk_base") * 0.8) + (col("risk_base") * col("conf_norm") * 0.2)
+            ) \
+            .withColumn("risk_raw", col("risk_base")) \
+            .withColumn("risk_adj", col("risk_score"))
 
-        # Store both raw and adjusted risk scores for analysis
-        enriched_df = enriched_df.withColumn("risk_raw", col("risk_base"))
-        enriched_df = enriched_df.withColumn("risk_adj", col("risk_score"))
-
-        # CHANGE 5: Generate unique doc_id using symbol+source+title to prevent duplicates
+        # ── Dedup doc ID ────────────────────────────────────────────
         enriched_df = enriched_df.withColumn(
             "doc_id",
-            sha2(concat_ws("_", 
-                          coalesce(col("symbol"), lit("")), 
-                          coalesce(col("source"), lit("")),
-                          col("title"), 
-                          coalesce(col("publishedAt"), lit("default"))), 256)
-        ).withColumn(
+            sha2(
+                concat_ws("_",
+                    coalesce(col("symbol"),      lit("")),
+                    coalesce(col("source"),      lit("")),
+                    col("title"),
+                    coalesce(col("publishedAt"), lit("default"))
+                ),
+                256
+            )
+        )
+
+        # ── Timestamp → epoch millis ────────────────────────────────
+        # ✅ Handles: ISO Z, ISO +00:00 offset, space-separated
+        enriched_df = enriched_df.withColumn(
             "publishedAt",
             coalesce(
                 to_timestamp(col("publishedAt"), "yyyy-MM-dd'T'HH:mm:ss.SSSSSS'Z'"),
                 to_timestamp(col("publishedAt"), "yyyy-MM-dd'T'HH:mm:ss'Z'"),
-                to_timestamp(col("publishedAt"), "yyyy-MM-dd HH:mm:ss")
+                to_timestamp(col("publishedAt"), "yyyy-MM-dd'T'HH:mm:ssXXX"),
+                to_timestamp(col("publishedAt"), "yyyy-MM-dd'T'HH:mm:ss.SSSXXX"),
+                to_timestamp(col("publishedAt"), "yyyy-MM-dd HH:mm:ss"),
             ).cast("long") * 1000
         )
 
-        # Step 1: sentiment-only impact assessment
+        # ── Impact assessment — Step 1: sentiment ───────────────────
+        # ✅ Threshold 0.2 — correct for 0.0–1.0 confidence scale
         enriched_df = enriched_df.withColumn(
             "impact_assessment",
-            when(col("confidence") < 20, "NEUTRAL")
-            .when(col("sentiment") >= 0.7, "BULLISH")
-            .when(col("sentiment") >= 0.4, "POSITIVE")
-            .when(col("sentiment") >= 0.1, "SLIGHTLY POSITIVE")
-            .when(col("sentiment") <= -0.7, "BEARISH")
-            .when(col("sentiment") <= -0.4, "NEGATIVE")
-            .when(col("sentiment") <= -0.1, "SLIGHTLY NEGATIVE")
-            .otherwise("NEUTRAL")
-        )
-        # Step 2: overlay risk
-        enriched_df = enriched_df.withColumn(
-            "impact_assessment",
-            when(col("risk_raw") >= 0.8, "HIGH RISK")
-            .when((col("risk_raw") >= 0.5) & (col("risk_raw") < 0.8), "MODERATE RISK")
-            .otherwise(col("impact_assessment"))
+            when(col("confidence") < 0.2,    "NEUTRAL")
+            .when(col("sentiment") >= 0.7,   "BULLISH")
+            .when(col("sentiment") >= 0.4,   "POSITIVE")
+            .when(col("sentiment") >= 0.1,   "SLIGHTLY POSITIVE")
+            .when(col("sentiment") <= -0.7,  "BEARISH")
+            .when(col("sentiment") <= -0.4,  "NEGATIVE")
+            .when(col("sentiment") <= -0.1,  "SLIGHTLY NEGATIVE")
+            .otherwise(                      "NEUTRAL")
         )
 
-        # CHANGE 7: Updated impact_score mapping with more granular values
+        # ── Impact assessment — Step 2: risk overlay ────────────────
+        # ✅ Preserves positive signal — RISKY BULLISH instead of overwrite
+        enriched_df = enriched_df.withColumn(
+            "impact_assessment",
+            when(
+                (col("risk_raw") >= 0.8) & (col("sentiment") <  0), "HIGH RISK"
+            ).when(
+                (col("risk_raw") >= 0.8) & (col("sentiment") >= 0), "RISKY BULLISH"
+            ).when(
+                (col("risk_raw") >= 0.5) & (col("sentiment") <  0), "MODERATE RISK"
+            ).otherwise(col("impact_assessment"))
+        )
+
+        # ── Impact score ────────────────────────────────────────────
         enriched_df = enriched_df.withColumn(
             "impact_score",
-            when(col("impact_assessment") == "BULLISH", 2.0)
-            .when(col("impact_assessment") == "POSITIVE", 1.0)
-            .when(col("impact_assessment") == "SLIGHTLY POSITIVE", 0.5)
-            .when(col("impact_assessment") == "NEUTRAL", 0.0)
+            when(col("impact_assessment") == "BULLISH",             2.0)
+            .when(col("impact_assessment") == "RISKY BULLISH",      1.5)
+            .when(col("impact_assessment") == "POSITIVE",           1.0)
+            .when(col("impact_assessment") == "SLIGHTLY POSITIVE",  0.5)
+            .when(col("impact_assessment") == "NEUTRAL",            0.0)
             .when(col("impact_assessment") == "SLIGHTLY NEGATIVE", -0.5)
-            .when(col("impact_assessment") == "NEGATIVE", -1.0)
-            .when(col("impact_assessment") == "BEARISH", -2.0)
-            .when(col("impact_assessment") == "HIGH RISK", -3.0)
-            .when(col("impact_assessment") == "MODERATE RISK", -1.5)
+            .when(col("impact_assessment") == "NEGATIVE",          -1.0)
+            .when(col("impact_assessment") == "BEARISH",           -2.0)
+            .when(col("impact_assessment") == "MODERATE RISK",     -1.5)
+            .when(col("impact_assessment") == "HIGH RISK",         -3.0)
             .otherwise(0.0)
         )
 
-        # CHANGE 8: Confidence-Weighted Risk Formula for final_score
-        # final_score = (impact_score * conf_norm) - (risk_raw * (1 - conf_norm))
-        enriched_df = enriched_df.withColumn(
-            "final_score",
-            (col("impact_score") * col("conf_norm")) - (col("risk_raw") * (1 - col("conf_norm")))
-        )
+        # ── Final score ─────────────────────────────────────────────
+        # formula: (impact_score × conf_norm) - (risk_raw × (1 - conf_norm))
+        enriched_df = enriched_df \
+            .withColumn("final_score",
+                (col("impact_score") * col("conf_norm"))
+                - (col("risk_raw") * (1 - col("conf_norm")))
+            ) \
+            .withColumn("sentiment_confidence_score",
+                col("sentiment") * col("conf_norm")
+            )
 
-        # CHANGE 9: Add sentiment_confidence_score for analysis
-        enriched_df = enriched_df.withColumn(
-            "sentiment_confidence_score", 
-            col("sentiment") * col("conf_norm")
-        )
-        
-        # Select fields for output - including both raw and adjusted risk scores
+        # ── Select output columns ───────────────────────────────────
+        # ✅ repartition(4) — better ES bulk write throughput
         final_df = enriched_df.select(
             "title", "description", "content", "publishedAt", "source",
-            "sentiment", "confidence", "conf_norm", "risk_level", "risk_raw", "risk_adj", "key_phrases",
-            "category", "summary", "impact_assessment", "impact_score", "final_score", 
-            "sentiment_confidence_score", "symbol", "entity_name", "link", "image_url", "doc_id"
+            "sentiment", "confidence", "conf_norm",
+            "risk_level", "risk_raw", "risk_adj",
+            "key_phrases", "category", "summary",
+            "impact_assessment", "impact_score",
+            "final_score", "sentiment_confidence_score",
+            "content_quality",
+            "symbol", "entity_name",
+            "link", "image_url", "doc_id"
         )
 
-        # Test Elasticsearch connection
-        import socket
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(2)
-            s.connect(("elasticsearch", 9200))
-            s.close()
-            print("Elasticsearch port is reachable")
-        except Exception as e:
-            print(f"ERROR: Cannot connect to Elasticsearch: {e}")
-            return
-
-        # DEBUG: Print sample row for inspection
+        # ── Debug sample ────────────────────────────────────────────
         try:
             sample = final_df.limit(1).collect()
             if sample:
                 row = sample[0].asDict()
                 print("Sample row for debugging:")
                 for k, v in row.items():
-                    s = (v[:50] + "...") if isinstance(v, str) and len(v) > 50 else v
-                    print(f"  {k}: {s}")
+                    display = (str(v)[:50] + "...") if isinstance(v, str) and len(str(v)) > 50 else v
+                    print(f"  {k}: {display}")
         except Exception as e:
-            print(f"Could not print sample data: {e}")
+            print(f"Could not print sample: {e}")
 
-        # Write to Elasticsearch with more resilient options
+        # ── ES connectivity check ───────────────────────────────────
         try:
-            print("Writing batch to Elasticsearch...")
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(2)
+            s.connect((ES_HOST, int(ES_PORT)))
+            s.close()
+        except Exception as e:
+            print(f"ERROR: Cannot reach Elasticsearch at {ES_HOST}:{ES_PORT} — {e}")
+            batch_df.unpersist()
+            return
+
+        # ── Write to Elasticsearch ──────────────────────────────────
+        try:
+            print(f"Writing batch {batch_id} to Elasticsearch...")
             final_df.write \
                 .format("org.elasticsearch.spark.sql") \
-                .option("es.nodes", "elasticsearch") \
-                .option("es.port", "9200") \
-                .option("es.nodes.wan.only", "true") \
-                .option("es.net.ssl", "false") \
-                .option("es.mapping.id", "doc_id") \
-                .option("es.write.operation", "upsert") \
-                .option("es.index.auto.create", "true") \
-                .option("es.resource", "news-analysis") \
-                .option("es.batch.size.entries", "100") \
+                .option("es.nodes",                   ES_HOST) \
+                .option("es.port",                    ES_PORT) \
+                .option("es.nodes.wan.only",          "true") \
+                .option("es.net.ssl",                 "false") \
+                .option("es.mapping.id",              "doc_id") \
+                .option("es.write.operation",         "upsert") \
+                .option("es.index.auto.create",       "true") \
+                .option("es.resource",                ES_INDEX) \
+                .option("es.batch.size.entries",      "100") \
                 .option("es.batch.write.retry.count", "3") \
-                .option("es.http.timeout", "60s") \
-                .option("es.mapping.date.rich", "false") \
+                .option("es.http.timeout",            "60s") \
+                .option("es.mapping.date.rich",       "false") \
                 .mode("append") \
                 .save()
-            print("Batch successfully written to Elasticsearch")
+            print(f"Batch {batch_id} successfully written to Elasticsearch")
         except Exception as e:
-            import traceback
-            print(f"ERROR writing to Elasticsearch: {e}")
+            print(f"ERROR writing batch {batch_id}: {e}")
             traceback.print_exc()
+
     except Exception as e:
-        import traceback
-        print(f"ERROR in write_to_es: {e}")
+        print(f"ERROR in write_to_es (batch {batch_id}): {e}")
         traceback.print_exc()
 
-# === Start Stream ===
-query = df_json.writeStream \
-    .outputMode("append") \
-    .foreachBatch(write_to_es) \
-    .option("checkpointLocation", CHECKPOINT_PATH) \
-    .start()
+    finally:
+        # ✅ Always release cache — prevents memory leak across batches
+        try:
+            batch_df.unpersist()
+        except Exception:
+            pass
 
-import requests
-import json
-try:
-    # Check if index exists
-    index_exists = requests.head("http://elasticsearch:9200/news-analysis")
-    if index_exists.status_code == 404:
-        print("Creating Elasticsearch index manually...")
-        index_mappings = {
-            "mappings": {
-                "properties": {
-                    "title": {"type": "text"},
-                    "description": {"type": "text"},
-                    "content": {"type": "text"},
-                    "publishedAt": {"type": "date", "format": "epoch_millis"},
-                    "source": {"type": "keyword"},
-                    "sentiment": {"type": "float"},
-                    "confidence": {"type": "float"},
-                    "conf_norm": {"type": "float"},
-                    "risk_level": {"type": "keyword"},
-                    "risk_raw": {"type": "float"},
-                    "risk_adj": {"type": "float"},
-                    "key_phrases": {"type": "text"},
-                    "category": {"type": "keyword"},
-                    "summary": {"type": "text"},
-                    "impact_assessment": {"type": "keyword"},
-                    "impact_score": {"type": "float"},
-                    "final_score": {"type": "float"},
-                    "sentiment_confidence_score": {"type": "float"},
-                    "symbol": {"type": "keyword"},
-                    "entity_name": {"type": "keyword"},
-                    "link": {"type": "keyword"},
-                    "image_url": {"type": "keyword"},
-                    "doc_id": {"type": "keyword"}
-                }
-            }
-        }
-        create_response = requests.put(
-            "http://elasticsearch:9200/news-analysis",
-            data=json.dumps(index_mappings),
-            headers={"Content-Type": "application/json"}
-        )
-        print(f"Index creation response: {create_response.status_code}")
-        print(f"Response text: {create_response.text}")
-    else:
-        print(f"Index already exists: status code {index_exists.status_code}")
-except Exception as e:
-    print(f"Could not create Elasticsearch index: {e}")
+# ============================================================
+# MAIN
+# ✅ Index created first, stream started exactly once
+# ============================================================
+if __name__ == "__main__":
+    ensure_index_exists()
 
-# === Start Stream ===
-print("Streaming query started, awaiting termination...")
-query = df_json.writeStream \
-    .outputMode("append") \
-    .foreachBatch(write_to_es) \
-    .option("checkpointLocation", CHECKPOINT_PATH) \
-    .start()
-query.awaitTermination()
+    print("Starting streaming query...")
+    query = df_json.writeStream \
+        .outputMode("append") \
+        .foreachBatch(write_to_es) \
+        .option("checkpointLocation", CHECKPOINT_PATH) \
+        .start()
+
+    print("Streaming query running — awaiting termination...")
+    query.awaitTermination()

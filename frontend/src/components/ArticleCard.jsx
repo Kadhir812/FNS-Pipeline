@@ -1,3 +1,4 @@
+// Confidence color helper
 import React, { useState, useMemo } from 'react';
 import { TrendingUp, TrendingDown, Minus, ExternalLink, Clock, Star, Tag, BarChart, Building, BarChart3 } from 'lucide-react';
 import { formatTimeAgo, getImpactBadge, getRiskLevel, getRiskLevelDisplay, getRiskLevelColor, getCategoryName } from '../utils/articleUtils';
@@ -27,21 +28,27 @@ const ArticleCard = ({ article, onReadMore }) => {
   const getImpactIcon = (impact) => {
     switch (impact?.toUpperCase()) {
       case 'POSITIVE':
-      case 'LOW':
-        return <TrendingUp size={12} />;
-      case 'NEGATIVE':
-      case 'HIGH':
-        return <TrendingDown size={12} />;
-      default:
-        return <Minus size={12} />;
-    }
-  };
-
-  // Use direct field access for symbol and entity name
-  const displaySymbol = article.symbol || null;
-  const displayEntity = article.entity_name || null;
-
-  return (
+        case 'LOW':
+          return <TrendingUp size={12} />;
+          case 'NEGATIVE':
+            case 'HIGH':
+              return <TrendingDown size={12} />;
+              default:
+                return <Minus size={12} />;
+              }
+            };
+            
+            // Use direct field access for symbol and entity name
+            const displaySymbol = article.symbol || null;
+            const displayEntity = article.entity_name || null;
+            
+            const getConfidenceColor = (confidence) => {
+            if (confidence >= 0.7) return "#22c55e";      // green  — high confidence
+            if (confidence >= 0.4) return "#eab308";      // yellow — medium confidence
+              if (confidence >= 0.2) return "#f97316";      // orange — low confidence
+              return "#ef4444";                              // red    — very low confidence
+            };
+            return (
     <article className="article-card">
       <div className="article-header">
         <div className="article-header-content">
@@ -84,7 +91,7 @@ const ArticleCard = ({ article, onReadMore }) => {
               {getRiskLevelDisplay(riskLevel)}
             </span>
           </div>
-          <div className="confidence-score">
+          <div className="confidence-score" style={{ color: getConfidenceColor(confidence) }}>
             <Star size={12} />
             {Math.round(confidence * 100)}%
           </div>

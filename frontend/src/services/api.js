@@ -33,12 +33,13 @@ import axios from 'axios';
 
 // Create axios instance with base configuration
 const api = axios.create({
-  baseURL: 'http://localhost:3001/api/v1',
+  baseURL: '/api/v1',  // ✅ relative — works in both dev and prod
   timeout: 30000,
   headers: {
     'Content-Type': 'application/json',
   },
 });
+
 
 // Request interceptor for logging
 api.interceptors.request.use(

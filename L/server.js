@@ -118,12 +118,12 @@ process.on('SIGINT', () => {
 });
 
 const PORT = config.port;
-const HOST = 'localhost';
+const HOST = '0.0.0.0';
 
 app.listen(PORT, HOST, () => {
   logger.info(`SignalEdge API server running on http://${HOST}:${PORT}`);
   logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  logger.info(`Elasticsearch: ${config.elasticsearch.host}`);
+  logger.info(`Elasticsearch: ${config.elasticsearch.url}`);
 });
 
 export default app;

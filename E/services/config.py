@@ -25,7 +25,8 @@ print(f"[DEBUG] USE_DISTILBART: {USE_DISTILBART} → {DISTILBART_PATH}")
 print(f"[DEBUG] USE_FINBERT:    {USE_FINBERT} → {FINBERT_PATH}")
 
 OLLAMA_URL   = os.getenv("OLLAMA_URL", "http://ollama:11434/api/generate")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:1.5b")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5:3b")
+# OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "deepseek-r1:1.5b")
 
 LOGS_DIR     = os.path.join(APP_DIR, "logs")
 ARCHIVE_PATH = os.path.join(APP_DIR, "news_archive.jsonl")

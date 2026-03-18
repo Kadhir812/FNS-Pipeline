@@ -1,3 +1,4 @@
+import re
 import time
 import redis
 from .config import DISTILBART_PATH, USE_DISTILBART
@@ -5,52 +6,80 @@ from .logging_setup import logger, fallback_logger
 
 DISTILBART_CLASSIFIER = None
 
+# ============================================================
+# REDIS — keyword store
+# ============================================================
 redis_client = redis.Redis(host="redis", port=6379, decode_responses=True)
 
 CATEGORY_LETTERS = "ABCDEFGHIJKLMN"
-CATEGORY_LIST = list(CATEGORY_LETTERS)
+CATEGORY_LIST    = list(CATEGORY_LETTERS)
 
 keywords_dict = {}
 for category in CATEGORY_LETTERS:
     redis_key = f"category_keywords_{category}"
     keywords_dict[category] = set(redis_client.smembers(redis_key))
 
+# ============================================================
+# COMPILED REGEX PATTERNS
+# ✅ Built once at module load — O(M) per category vs O(N×M)
+# ============================================================
+keyword_patterns = {}
+for category in CATEGORY_LETTERS:
+    kws = keywords_dict.get(category, set())
+    if kws:
+        escaped = [re.escape(w.lower()) for w in kws]
+        pattern = "|".join(escaped)
+        keyword_patterns[category] = re.compile(pattern, re.IGNORECASE)
+    else:
+        keyword_patterns[category] = None
 
+# ============================================================
+# LABELS & MAP
+# ============================================================
 CATEGORY_LABELS = [
-    "earnings and quarterly results",
-    "analyst ratings and recommendations",
-    "mergers, acquisitions and deals",
-    "regulatory and legal developments",
-    "economic data and central banks",
-    "corporate actions and leadership",
-    "market trends and sector analysis",
-    "ipo and new listings",
-    "product launches and innovation",
-    "general business and industry news",
-    "commodities and energy",
-    "esg and sustainability",
-    "macro and geopolitics",
-    "technology trends and disruption",
+    "earnings, quarterly results, fund commentary and financial performance",  # A
+    "analyst ratings, price targets and stock recommendations",                # B
+    "mergers, acquisitions, deals and takeovers",                             # C
+    "regulatory, legal, compliance and government investigations",             # D
+    "economic data, central banks, interest rates and monetary policy",       # E
+    "corporate actions, executive changes and leadership",                    # F
+    "market trends, sector analysis and investment flows",                    # G
+    "ipo, new listings, public offerings and stock debuts",                   # H
+    "product launches, clinical trials, drug approvals and innovation",       # I
+    "general business, company news and industry updates",                    # J
+    "commodities, energy, oil, gas and raw materials",                        # K
+    "esg, sustainability, climate and corporate responsibility",              # L
+    "macro, geopolitics, trade wars, sanctions and political events",         # M
+    "technology trends, ai, semiconductors and digital disruption",           # N
 ]
 
 CATEGORY_MAP = {
-    "earnings and quarterly results": "A",
-    "analyst ratings and recommendations": "B",
-    "mergers, acquisitions and deals": "C",
-    "regulatory and legal developments": "D",
-    "economic data and central banks": "E",
-    "corporate actions and leadership": "F",
-    "market trends and sector analysis": "G",
-    "ipo and new listings": "H",
-    "product launches and innovation": "I",
-    "general business and industry news": "J",
-    "commodities and energy": "K",
-    "esg and sustainability": "L",
-    "macro and geopolitics": "M",
-    "technology trends and disruption": "N",
+    "earnings, quarterly results, fund commentary and financial performance":  "A",
+    "analyst ratings, price targets and stock recommendations":                "B",
+    "mergers, acquisitions, deals and takeovers":                             "C",
+    "regulatory, legal, compliance and government investigations":             "D",
+    "economic data, central banks, interest rates and monetary policy":       "E",
+    "corporate actions, executive changes and leadership":                    "F",
+    "market trends, sector analysis and investment flows":                    "G",
+    "ipo, new listings, public offerings and stock debuts":                   "H",
+    "product launches, clinical trials, drug approvals and innovation":       "I",
+    "general business, company news and industry updates":                    "J",
+    "commodities, energy, oil, gas and raw materials":                        "K",
+    "esg, sustainability, climate and corporate responsibility":              "L",
+    "macro, geopolitics, trade wars, sanctions and political events":         "M",
+    "technology trends, ai, semiconductors and digital disruption":           "N",
 }
 
+# ============================================================
+# RULE OVERRIDE THRESHOLD
+# If Redis keyword score >= this, skip ML entirely
+# ✅ Single source of truth — no hardcoded rule lists
+# ============================================================
+RULE_CONFIDENCE_THRESHOLD = 0.6
 
+# ============================================================
+# DISTILBART — load
+# ============================================================
 def load_distilbart_classifier():
     global DISTILBART_CLASSIFIER
 
@@ -69,28 +98,32 @@ def load_distilbart_classifier():
             "zero-shot-classification",
             model=DISTILBART_PATH,
             device=-1,
-            max_length=256,
+            max_length=512,
             truncation=True,
             padding=True,
         )
-
         logger.info("DistilBART classifier loaded successfully")
-        print("DistilBART classifier loaded")
         return DISTILBART_CLASSIFIER
+
     except Exception as error:
         logger.error(f"Failed to load DistilBART classifier: {str(error)}")
-        print(f"DistilBART loading error: {error}")
         return None
 
-
-def classify_with_distilbart(text):
+# ============================================================
+# DISTILBART — classify
+# ✅ title + description + content for richer context
+# ✅ Top-3 labels used — captures secondary signals
+# ✅ Returns (best_category, best_confidence, ml_scores_dict)
+# ============================================================
+def classify_with_distilbart(text, title="", description=""):
     global DISTILBART_CLASSIFIER
 
     if not USE_DISTILBART or not text or len(text.strip()) < 15:
         logger.info(
-            f"DistilBART skipped: available={USE_DISTILBART}, text_length={len(text) if text else 0}"
+            f"DistilBART skipped: available={USE_DISTILBART}, "
+            f"text_length={len(text) if text else 0}"
         )
-        return None
+        return None, None, {}
 
     try:
         logger.info("Starting DistilBART classification...")
@@ -98,175 +131,302 @@ def classify_with_distilbart(text):
             DISTILBART_CLASSIFIER = load_distilbart_classifier()
 
         if DISTILBART_CLASSIFIER is None:
-            return None
+            return None, None, {}
 
-        text_short = text[:200] if len(text) > 200 else text
-        classification_start = time.time()
-        result = DISTILBART_CLASSIFIER(text_short, CATEGORY_LABELS)
-        classification_time = time.time() - classification_start
+        # ✅ title first — highest signal, then description, then content
+        parts = []
+        if title and len(title.strip()) > 5:
+            parts.append(title.strip())
+        if description and len(description.strip()) > 10:
+            parts.append(description.strip())
+        if text and len(text.strip()) > 10:
+            parts.append(text.strip())
 
-        predicted_category = result["labels"][0]
-        confidence = result["scores"][0]
-        final_category = CATEGORY_MAP.get(predicted_category, "J")
+        combined   = " ".join(parts)
+        text_input = combined[:512] if len(combined) > 512 else combined
 
         logger.info(
-            f"DistilBART classification SUCCESS - Category: {final_category} - "
-            f"Label: '{predicted_category}' - Confidence: {confidence:.3f} - "
-            f"Time: {classification_time:.2f}s"
+            f"DistilBART input: {len(text_input)} chars "
+            f"(title={len(title)}, desc={len(description)}, content={len(text)})"
         )
 
-        return final_category
+        classification_start = time.time()
+        result               = DISTILBART_CLASSIFIER(text_input, CATEGORY_LABELS)
+        classification_time  = time.time() - classification_start
+
+        # ✅ Top-3 labels — captures secondary category signals
+        top_n      = 3
+        top_labels = result["labels"][:top_n]
+        top_scores = result["scores"][:top_n]
+
+        # Accumulate scores per category
+        # (multiple labels can map to same category letter)
+        ml_scores = {}
+        for label, score in zip(top_labels, top_scores):
+            category = CATEGORY_MAP.get(label, "J")
+            ml_scores[category] = ml_scores.get(category, 0.0) + score
+
+        # ✅ Normalize — prevents score inflation
+        total = sum(ml_scores.values())
+        if total > 0:
+            ml_scores = {k: v / total for k, v in ml_scores.items()}
+
+        best_category   = CATEGORY_MAP.get(top_labels[0], "J")
+        best_confidence = top_scores[0]
+
+        logger.info(
+            f"DistilBART SUCCESS - Top-3: "
+            + ", ".join(
+                f"{CATEGORY_MAP.get(l, 'J')}={s:.3f}"
+                for l, s in zip(top_labels, top_scores)
+            )
+            + f" — Time: {classification_time:.2f}s"
+        )
+
+        return best_category, best_confidence, ml_scores
+
     except Exception as error:
         logger.error(f"DistilBART classification FAILED: {str(error)}")
-        return None
+        return None, None, {}
 
-
+# ============================================================
+# KEYWORD — simple fallback
+# ✅ Uses compiled regex patterns
+# ============================================================
 def keyword_based_category(text):
     text_lower = text.lower()
-    for category, keywords in keywords_dict.items():
-        if any(word in text_lower for word in keywords):
+    for category in CATEGORY_LIST:
+        pattern = keyword_patterns.get(category)
+        if pattern and pattern.search(text_lower):
             return category
     return "J"
 
-
+# ============================================================
+# KEYWORD — weighted scoring
+# ✅ Compiled regex — O(M) per category
+# ✅ Unique matches + total occurrences tracked separately
+# ============================================================
 def calculate_keyword_scores(text):
-    text_lower = text.lower()
+    text_lower      = text.lower()
     category_scores = {}
 
     for category in CATEGORY_LIST:
+        pattern = keyword_patterns.get(category)
+        if not pattern:
+            continue
+
         try:
-            keywords = keywords_dict.get(category, set())
-            if keywords:
-                keyword_matches = 0
-                total_keywords = len(keywords)
-                match_weight = 0.0
+            matches = pattern.findall(text_lower)
+            if not matches:
+                continue
 
-                for keyword in keywords:
-                    keyword_lower = keyword.lower()
-                    if keyword_lower in text_lower:
-                        occurrences = text_lower.count(keyword_lower)
-                        specificity_weight = min(len(keyword.split()) * 0.2, 1.0)
-                        frequency_weight = min(occurrences * 0.3, 1.0)
-                        match_weight += (1.0 + specificity_weight + frequency_weight)
-                        keyword_matches += 1
+            unique_matches    = set(matches)
+            total_keywords    = len(keywords_dict.get(category, set()))
+            keyword_matches   = len(unique_matches)
+            total_occurrences = len(matches)
 
-                if total_keywords > 0:
-                    base_score = keyword_matches / total_keywords
-                    strength_boost = min(match_weight / total_keywords, 0.5)
-                    final_score = min(base_score + strength_boost, 1.0)
-                    category_scores[category] = final_score
+            if total_keywords > 0 and keyword_matches > 0:
+                base_score = keyword_matches / total_keywords
+
+                # Multi-word keywords score higher — more specific signal
+                specificity_boost = sum(
+                    min(len(m.split()) * 0.2, 1.0) for m in unique_matches
+                ) / keyword_matches
+
+                frequency_weight = min(total_occurrences * 0.1, 0.5)
+                strength_boost   = min(specificity_boost + frequency_weight, 0.5)
+                final_score      = min(base_score + strength_boost, 1.0)
+                category_scores[category] = final_score
+
         except Exception as error:
-            logger.error(f"Redis keyword scoring error for {category}: {error}")
+            logger.error(f"Keyword scoring error for {category}: {error}")
             continue
 
     return category_scores
 
-
-def check_rule_based_overrides(text):
-    text_lower = text.lower()
-
-    if any(term in text_lower for term in ["insider trading", "insider trade", "insider sold", "insider bought"]):
-        return "F"
-    if any(term in text_lower for term in ["ipo filing", "ipo launch", "going public", "initial public offering"]):
-        return "H"
-    if any(term in text_lower for term in ["merger agreement", "acquisition deal", "takeover bid"]):
-        return "C"
-    if any(term in text_lower for term in ["sec filing", "sec investigation", "regulatory probe"]):
-        return "D"
-    if any(term in text_lower for term in ["fed meeting", "interest rate decision", "monetary policy"]):
-        return "E"
-
-    return None
-
-
-def weighted_category_classification(text, article_num):
-    alpha = 0.7
-    beta = 0.3
+# ============================================================
+# WEIGHTED CLASSIFICATION
+# ✅ Single source of truth — Redis keywords only
+# ✅ No hardcoded rule lists — check_rule_based_overrides removed
+# ✅ keyword_scores computed once, reused in override + weighted combo
+# ✅ API confidence used instead of hardcoded 0.8
+# ✅ Top-3 ML scores scaled by API confidence
+# ============================================================
+def weighted_category_classification(
+    text,
+    article_num,
+    api_confidence=0.5,
+    title="",
+    description=""
+):
+    alpha         = 0.7
+    beta          = 0.3
     min_threshold = 0.4
 
-    category_scores = {}
-
-    ml_scores = {}
-    distilbart_category = classify_with_distilbart(text)
-    distilbart_confidence = 0.8
-
-    if distilbart_category:
-        ml_scores[distilbart_category] = distilbart_confidence
-
+    # ── Step 1: Compute keyword scores ONCE ─────────────────
+    # Reused in both override check and weighted combination
     keyword_scores = calculate_keyword_scores(text)
 
+    # ── Step 2: Redis high-confidence override ───────────────
+    # ✅ Replaces hardcoded check_rule_based_overrides()
+    # If any category has strong keyword signal, skip ML entirely
+    if keyword_scores:
+        best_kw_cat   = max(keyword_scores, key=keyword_scores.get)
+        best_kw_score = keyword_scores[best_kw_cat]
+
+        if best_kw_score >= RULE_CONFIDENCE_THRESHOLD:
+            logger.info(
+                f"Article {article_num}: REDIS RULE OVERRIDE → {best_kw_cat} "
+                f"(keyword_score={best_kw_score:.3f} >= "
+                f"threshold={RULE_CONFIDENCE_THRESHOLD})"
+            )
+            score_breakdown = {
+                "ml_score":         0.0,
+                "keyword_score":    best_kw_score,
+                "combined_score":   best_kw_score,
+                "model_confidence": 0.0,
+                "api_confidence":   api_confidence,
+                "top_3_ml":         {},
+                "top_3_combined":   [(best_kw_cat, best_kw_score)],
+                "weights":          {"alpha": alpha, "beta": beta},
+            }
+            fallback_logger.info(
+                f"CLASSIFICATION,REDIS_RULE_OVERRIDE,{best_kw_cat},"
+                f"{best_kw_score:.3f},0.000,{best_kw_score:.3f},"
+                f"0.000,{api_confidence:.3f}"
+            )
+            return best_kw_cat, best_kw_score, "REDIS_RULE_OVERRIDE", score_breakdown
+
+    # ── Step 3: DistilBART ML classification ────────────────
+    # Only runs if no high-confidence keyword override
+    distilbart_category, distilbart_model_confidence, distilbart_ml_scores = \
+        classify_with_distilbart(text, title, description)
+
+    if distilbart_category and distilbart_ml_scores:
+        # ✅ Scale all top-3 scores by API confidence
+        ml_scores = {
+            cat: score * api_confidence
+            for cat, score in distilbart_ml_scores.items()
+        }
+        logger.info(
+            f"Article {article_num}: DistilBART top-3 ML scores "
+            f"(scaled by api_conf={api_confidence:.3f}): "
+            + ", ".join(f"{k}={v:.3f}" for k, v in ml_scores.items())
+        )
+    else:
+        ml_scores = {}
+
+    # ── Step 4: Weighted combination ────────────────────────
+    # ✅ keyword_scores already computed in Step 1 — no recompute
     all_categories = set(
-        list(ml_scores.keys())
-        + list(keyword_scores.keys())
-        + ["A", "B", "C", "D", "E", "F", "G", "H", "I", "J", "K", "L", "M", "N"]
+        list(ml_scores.keys()) +
+        list(keyword_scores.keys()) +
+        CATEGORY_LIST
     )
 
+    category_scores = {}
     for category in all_categories:
-        ml_score = ml_scores.get(category, 0.0)
+        ml_score      = ml_scores.get(category, 0.0)
         keyword_score = keyword_scores.get(category, 0.0)
-        combined_score = (alpha * ml_score) + (beta * keyword_score)
-        category_scores[category] = combined_score
+        combined      = (alpha * ml_score) + (beta * keyword_score)
+        category_scores[category] = combined
 
-    if category_scores:
-        best_category = max(category_scores, key=category_scores.get)
-        best_score = category_scores[best_category]
+    if not category_scores:
+        logger.warning(
+            f"Article {article_num}: NO CLASSIFICATION SCORES - Default: J"
+        )
+        return "J", 0.2, "DEFAULT_NO_SCORES", {}
 
-        score_breakdown = {
-            "ml_score": ml_scores.get(best_category, 0.0),
-            "keyword_score": keyword_scores.get(best_category, 0.0),
-            "combined_score": best_score,
-            "weights": {"alpha": alpha, "beta": beta},
-            "top_3_combined": sorted(category_scores.items(), key=lambda item: item[1], reverse=True)[:3],
-        }
+    best_category = max(category_scores, key=category_scores.get)
+    best_score    = category_scores[best_category]
 
-        if best_score >= min_threshold:
-            if ml_scores.get(best_category, 0.0) > 0.6:
-                method = "WEIGHTED_ML_DOMINANT"
-            elif keyword_scores.get(best_category, 0.0) > 0.7:
-                method = "WEIGHTED_KEYWORD_DOMINANT"
-            else:
-                method = "WEIGHTED_BALANCED"
+    score_breakdown = {
+        "ml_score":         ml_scores.get(best_category, 0.0),
+        "keyword_score":    keyword_scores.get(best_category, 0.0),
+        "combined_score":   best_score,
+        "model_confidence": distilbart_model_confidence or 0.0,
+        "api_confidence":   api_confidence,
+        "top_3_ml":         dict(list(ml_scores.items())[:3]),
+        "top_3_combined":   sorted(
+            category_scores.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )[:3],
+        "weights": {"alpha": alpha, "beta": beta},
+    }
 
-            logger.info(f"Article {article_num}: {method} - Category: {best_category}, Score: {best_score:.3f}")
-            return best_category, best_score, method, score_breakdown
-
-        rule_category = check_rule_based_overrides(text)
-        if rule_category:
-            logger.info(
-                f"Article {article_num}: RULE OVERRIDE - Category: {rule_category}, Low weighted score: {best_score:.3f}"
-            )
-            return rule_category, 0.8, "RULE_OVERRIDE", score_breakdown
-
-        logger.warning(f"Article {article_num}: DEFAULT CATEGORY - J, Low confidence: {best_score:.3f}")
-        return "J", 0.3, "DEFAULT_LOW_CONFIDENCE", score_breakdown
-
-    logger.warning(f"Article {article_num}: NO CLASSIFICATION SCORES - Default: J")
-    return "J", 0.2, "DEFAULT_NO_SCORES", {}
-
-
-def enhanced_classify_news_category(text, payload, article_num):
-    try:
-        category, confidence, method, breakdown = weighted_category_classification(text, article_num)
+    # ── Step 5: Check weighted threshold ────────────────────
+    if best_score >= min_threshold:
+        if ml_scores.get(best_category, 0.0) > 0.6:
+            method = "WEIGHTED_ML_DOMINANT"
+        elif keyword_scores.get(best_category, 0.0) > 0.7:
+            method = "WEIGHTED_KEYWORD_DOMINANT"
+        else:
+            method = "WEIGHTED_BALANCED"
 
         logger.info(
-            f"Article {article_num}: Classification Breakdown - ML: {breakdown.get('ml_score', 0.0):.3f}, "
-            f"Keywords: {breakdown.get('keyword_score', 0.0):.3f}, Combined: {breakdown.get('combined_score', 0.0):.3f}"
+            f"Article {article_num}: {method} - "
+            f"Category: {best_category}, Score: {best_score:.3f}"
+        )
+        return best_category, best_score, method, score_breakdown
+
+    # ── Step 6: Final fallback — default J ──────────────────
+    logger.warning(
+        f"Article {article_num}: DEFAULT J (low confidence: {best_score:.3f})"
+    )
+    return "J", 0.3, "DEFAULT_LOW_CONFIDENCE", score_breakdown
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+def enhanced_classify_news_category(text, payload, article_num):
+    try:
+        title          = payload.get("title",       "")
+        description    = payload.get("description", "")
+        api_confidence = payload.get("confidence",  0.5)
+
+        category, confidence, method, breakdown = weighted_category_classification(
+            text,
+            article_num,
+            api_confidence=api_confidence,
+            title=title,
+            description=description,
+        )
+
+        logger.info(
+            f"Article {article_num}: Classification Breakdown - "
+            f"ML: {breakdown.get('ml_score', 0.0):.3f}, "
+            f"Keywords: {breakdown.get('keyword_score', 0.0):.3f}, "
+            f"Combined: {breakdown.get('combined_score', 0.0):.3f}, "
+            f"ModelConf: {breakdown.get('model_confidence', 0.0):.3f}, "
+            f"APIConf: {breakdown.get('api_confidence', 0.0):.3f}"
         )
 
         fallback_logger.info(
-            f"CLASSIFICATION,{method},{category},{confidence:.3f},{breakdown.get('ml_score', 0.0):.3f},{breakdown.get('keyword_score', 0.0):.3f}"
+            f"CLASSIFICATION,{method},{category},{confidence:.3f},"
+            f"{breakdown.get('ml_score', 0.0):.3f},"
+            f"{breakdown.get('keyword_score', 0.0):.3f},"
+            f"{breakdown.get('model_confidence', 0.0):.3f},"
+            f"{breakdown.get('api_confidence', 0.0):.3f}"
         )
 
         payload["category"] = category
         return category
+
     except Exception as error:
-        logger.error(f"Article {article_num}: Enhanced classification error: {error}")
+        logger.error(
+            f"Article {article_num}: Enhanced classification error: {error}"
+        )
         try:
             category = keyword_based_category(text)
             payload["category"] = category
-            logger.warning(f"Article {article_num}: FALLBACK to keyword classification: {category}")
+            logger.warning(
+                f"Article {article_num}: FALLBACK to keyword classification: {category}"
+            )
             return category
         except Exception as fallback_error:
-            logger.error(f"Article {article_num}: All classification methods failed: {fallback_error}")
+            logger.error(
+                f"Article {article_num}: All classification methods failed: {fallback_error}"
+            )
             payload["category"] = "J"
             return "J"
