@@ -13,7 +13,7 @@ export const config = {
   
   // Elasticsearch Configuration
   elasticsearch: {
-    url: process.env.ELASTICSEARCH_URL || 'http://localhost:9200',
+    url: process.env.ELASTICSEARCH_URL || 'http://elasticsearch:9200',
     index: process.env.ELASTICSEARCH_INDEX || 'news-analysis',
     // username: process.env.ELASTICSEARCH_USERNAME,
     // password: process.env.ELASTICSEARCH_PASSWORD

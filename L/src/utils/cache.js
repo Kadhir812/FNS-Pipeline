@@ -2,20 +2,42 @@ import logger from './logger.js';
 
 let redisClient = null;
 let isRedisAvailable = false;
+let initAttempted = false;
 
-// Lazy-load redis client so app still works if package isn't installed / Redis down
 async function initRedis() {
-  if (redisClient || isRedisAvailable) return;
+  // ✅ Already connected — skip
+  if (redisClient && isRedisAvailable) return;
+
+  // ✅ Don't hammer Redis on every call if it already failed once
+  if (initAttempted && !isRedisAvailable) return;
+
+  initAttempted = true;
+
   try {
     const { createClient } = await import('redis');
-    redisClient = createClient({ url: process.env.REDIS_URL || 'redis://localhost:6379' });
+    redisClient = createClient({
+      url: process.env.REDIS_URL || 'redis://redis:6379'
+    });
+
     redisClient.on('error', (err) => {
       logger.error('Redis client error', { error: err.message });
       isRedisAvailable = false;
+      redisClient = null;      // ✅ force re-init on next call
+      initAttempted = false;   // ✅ allow retry after transient failure
     });
+
+    redisClient.on('reconnecting', () => {
+      logger.info('Redis reconnecting...');
+    });
+
+    redisClient.on('ready', () => {
+      isRedisAvailable = true;
+      logger.info('Redis ready');
+    });
+
     await redisClient.connect();
     isRedisAvailable = true;
-    logger.info('Connected to Redis');
+    logger.info('✅ Connected to Redis');
   } catch (err) {
     logger.warn('Redis unavailable - continuing without cache', { error: err.message });
     redisClient = null;
@@ -27,8 +49,7 @@ async function get(key) {
   try {
     await initRedis();
     if (!isRedisAvailable || !redisClient) return null;
-    const v = await redisClient.get(key);
-    return v;
+    return await redisClient.get(key);
   } catch (err) {
     logger.warn('Redis get failed', { key, error: err.message });
     return null;
@@ -54,19 +75,34 @@ async function del(key) {
     await redisClient.del(key);
     return true;
   } catch (err) {
-    logger.warn('Redis delete failed', { key, error: err.message });
+    logger.warn('Redis del failed', { key, error: err.message });
     return false;
   }
 }
 
+// ✅ Use SCAN instead of KEYS — non-blocking, safe in production
 async function clearPattern(pattern) {
   try {
     await initRedis();
     if (!isRedisAvailable || !redisClient) return false;
-    const keys = await redisClient.keys(pattern);
-    if (keys.length > 0) {
-      await redisClient.del(keys);
-      logger.info(`Cleared ${keys.length} cache keys matching pattern: ${pattern}`);
+
+    let cursor = 0;
+    let totalDeleted = 0;
+
+    do {
+      const { cursor: nextCursor, keys } = await redisClient.scan(cursor, {
+        MATCH: pattern,
+        COUNT: 100
+      });
+      cursor = nextCursor;
+      if (keys.length > 0) {
+        await redisClient.del(keys);
+        totalDeleted += keys.length;
+      }
+    } while (cursor !== 0);
+
+    if (totalDeleted > 0) {
+      logger.info(`Cleared ${totalDeleted} cache keys matching: ${pattern}`);
     }
     return true;
   } catch (err) {
@@ -80,6 +116,6 @@ export default {
   set,
   del,
   clearPattern,
-  // expose a flag useful for diagnostics
-  isAvailable: () => isRedisAvailable
+  isAvailable: () => isRedisAvailable,
+  getClient: () => redisClient 
 };
