@@ -67,6 +67,8 @@ services:
       - "11434:11434"
     volumes:
       - d:/ollama:/root/.ollama
+      - ./ollama-entrypoint.sh:/entrypoint.sh:ro
+    entrypoint: ["sh", "/entrypoint.sh"]
     networks:
       - etl-net
     # healthcheck via HTTP — ollama exposes /api/tags when ready
